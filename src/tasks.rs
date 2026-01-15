@@ -6,6 +6,7 @@ pub mod accelerometer;
 pub mod app_controller;
 pub mod button_monitor;
 pub mod display;
+pub mod http_server;
 pub mod hub75;
 pub mod sntp;
 pub mod wifi_connection;

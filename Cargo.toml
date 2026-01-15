@@ -65,8 +65,11 @@ heapless = "0.9"
 libm = "0.2"
 log = "0.4"
 micromath = "2.1"
-prost = { version = "0.14.3", default-features = false, features = ["derive"] }
+picoserve = { version = "0.17", default-features = false, features = [
+  "embassy",
+] }
 portable-atomic = { version = "1.10", features = ["critical-section"] }
+prost = { version = "0.14.3", default-features = false, features = ["derive"] }
 reqwless = { version = "0.13", default-features = false, features = [
   "embedded-tls",
 ] }

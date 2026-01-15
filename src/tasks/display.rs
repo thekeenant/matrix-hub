@@ -59,6 +59,7 @@ async fn display_task_impl(
     let mut tps_counter = RateCounter::init(Duration::from_secs(1));
 
     loop {
+        info!("display_task: rendering frame");
         frame_buffer.erase();
         let apps_guard = apps.lock().await;
         if !apps_guard.is_empty() {

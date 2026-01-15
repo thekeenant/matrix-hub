@@ -13,8 +13,13 @@ use crate::state::SharedMatrixHubState;
 #[embassy_executor::task]
 pub async fn accelerometer_task(i2c: I2c<'static, Async>, state: SharedMatrixHubState) {
     info!("Initializing LIS3DH accelerometer...");
-    let mut lis3dh = match Lis3dh::new_i2c(i2c, SlaveAddr::Alternate).await {
-        Ok(mut accel) => {
+    let mut lis3dh = match embassy_time::with_timeout(
+        Duration::from_secs(3),
+        Lis3dh::new_i2c(i2c, SlaveAddr::Alternate),
+    )
+    .await
+    {
+        Ok(Ok(mut accel)) => {
             info!("LIS3DH found at {:?}", SlaveAddr::Alternate);
             if let Err(e) = accel.set_range(Range::G2).await {
                 info!("Failed to set accelerometer range: {:?}", e);
@@ -22,9 +27,19 @@ pub async fn accelerometer_task(i2c: I2c<'static, Async>, state: SharedMatrixHub
             info!("LIS3DH initialized successfully!");
             accel
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             info!("ERROR: Failed to initialize LIS3DH at 0x19: {:?}", e);
             info!("Check I2C wiring: SDA=GPIO16, SCL=GPIO17 (STEMMA QT)");
+
+            // Just set default gravity and return - don't simulate
+            loop {
+                Timer::after(Duration::from_secs(5)).await;
+                info!("LIS3DH still not available - gravity defaulting to down");
+            }
+        }
+        Err(_) => {
+            info!("ERROR: LIS3DH initialization timed out after 3s");
+            info!("No I2C device responding - gravity defaulting to down");
 
             // Just set default gravity and return - don't simulate
             loop {

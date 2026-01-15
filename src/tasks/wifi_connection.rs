@@ -73,7 +73,12 @@ async fn wifi_connection_task_impl(
             let client_config = ModeConfig::Client(
                 ClientConfig::default()
                     .with_ssid(current_ssid.as_str().into())
-                    .with_password(current_password.as_str().into()),
+                    .with_password(current_password.as_str().into())
+                    .with_auth_method(if current_password.is_empty() {
+                        esp_radio::wifi::AuthMethod::None
+                    } else {
+                        esp_radio::wifi::AuthMethod::Wpa2Personal
+                    }),
             );
             controller.set_config(&client_config)?;
         }

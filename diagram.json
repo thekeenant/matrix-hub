@@ -1,0 +1,132 @@
+{
+  "version": 1,
+  "author": "Matrix Hub",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "board-esp32-s3-devkitc-1",
+      "id": "esp",
+      "top": 0,
+      "left": 0,
+      "attrs": {
+        "builder": "rust-nostd-esp",
+        "psramSize": "8",
+        "flashSize": "8"
+      }
+    },
+    {
+      "type": "wokwi-hub75-matrix",
+      "id": "matrix",
+      "top": -300,
+      "left": 0,
+      "attrs": {
+        "rows": "128",
+        "cols": "32",
+        "pixelate": "1"
+      }
+    }
+  ],
+  "connections": [
+    [
+      "esp:TX",
+      "$serialMonitor:RX",
+      "",
+      []
+    ],
+    [
+      "esp:RX",
+      "$serialMonitor:TX",
+      "",
+      []
+    ],
+    [
+      "esp:2",
+      "matrix:CLK",
+      "green",
+      []
+    ],
+    [
+      "esp:47",
+      "matrix:LAT",
+      "green",
+      []
+    ],
+    [
+      "esp:14",
+      "matrix:OE",
+      "green",
+      []
+    ],
+    [
+      "esp:45",
+      "matrix:A",
+      "yellow",
+      []
+    ],
+    [
+      "esp:36",
+      "matrix:B",
+      "yellow",
+      []
+    ],
+    [
+      "esp:48",
+      "matrix:C",
+      "yellow",
+      []
+    ],
+    [
+      "esp:35",
+      "matrix:D",
+      "yellow",
+      []
+    ],
+    [
+      "esp:21",
+      "matrix:E",
+      "yellow",
+      []
+    ],
+    [
+      "esp:42",
+      "matrix:R1",
+      "red",
+      []
+    ],
+    [
+      "esp:40",
+      "matrix:G1",
+      "green",
+      []
+    ],
+    [
+      "esp:41",
+      "matrix:B1",
+      "blue",
+      []
+    ],
+    [
+      "esp:38",
+      "matrix:R2",
+      "red",
+      []
+    ],
+    [
+      "esp:37",
+      "matrix:G2",
+      "green",
+      []
+    ],
+    [
+      "esp:39",
+      "matrix:B2",
+      "blue",
+      []
+    ]
+  ],
+  "serialMonitor": {
+    "display": "terminal",
+    "convertEol": true
+  },
+  "dependencies": {}
+}

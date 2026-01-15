@@ -109,12 +109,12 @@ unwrap_used = "warn"
 opt-level = "s"
 
 [profile.release]
-codegen-units = 1        # LLVM can perform better optimizations using a single thread
-debug = false            # Disable debug info for smaller binary
-debug-assertions = false
-incremental = false
-lto = 'fat'              # Link-time optimization
-opt-level = 'z'          # Optimize for size
-overflow-checks = false
-strip = true             # Strip symbols from binary
-panic = 'abort'          # Reduce panic overhead
+# codegen-units = 1        # LLVM can perform better optimizations using a single thread
+# debug = false            # Disable debug info for smaller binary
+# debug-assertions = false
+# incremental = false
+# lto = 'fat'              # Link-time optimization
+# opt-level = 'z'          # Optimize for size
+# overflow-checks = false
+# strip = true             # Strip symbols from binary
+# panic = 'abort'          # Reduce panic overhead

@@ -38,11 +38,14 @@ pub async fn fetch(
 ) -> anyhow::Result<alloc::vec::Vec<u8>> {
     debug!("Creating HTTP request for: {}", url);
 
-    // Create request
-    let mut request = client
-        .request(method, url)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to create request: {:?}", e))?;
+    // Create request with timeout
+    let mut request = embassy_time::with_timeout(
+        embassy_time::Duration::from_secs(10),
+        client.request(method, url),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("HTTP request creation timed out after 10s"))?
+    .map_err(|e| anyhow::anyhow!("Failed to create request: {:?}", e))?;
 
     // Allocate buffers on the heap
     const SEND_SIZE: usize = 4 * 1024;

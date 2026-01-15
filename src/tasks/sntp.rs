@@ -52,14 +52,17 @@ async fn sync_time(
     stack: SharedNetworkStack,
 ) -> anyhow::Result<()> {
     info!("SNTP: Starting time sync");
-    let _http_client_guard = http_client.lock().await;
+    // let _http_client_guard = http_client.lock().await;
     let stack = stack.lock().await;
 
-    // Resolve NTP server address
-    let addrs = stack
-        .dns_query(NTP_SERVER, embassy_net::dns::DnsQueryType::A)
-        .await
-        .map_err(|e| anyhow::anyhow!("DNS query failed: {:?}", e))?;
+    info!("SNTP: Resolving NTP server address...");
+    let addrs = embassy_time::with_timeout(
+        Duration::from_secs(5),
+        stack.dns_query(NTP_SERVER, embassy_net::dns::DnsQueryType::A),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("DNS query timed out after 5s"))?
+    .map_err(|e| anyhow::anyhow!("DNS query failed: {:?}", e))?;
 
     let addr = *addrs
         .first()

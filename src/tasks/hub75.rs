@@ -148,14 +148,29 @@ async fn hub75_task_impl(
         latch: peripherals.latch,
     };
 
-    let mut hub75 = Hub75Async::new_async(
+    info!("hub75_task: initializing hardware...");
+    let mut hub75 = match Hub75Async::new_async(
         peripherals.lcd_cam,
         pins,
         channel,
         tx_descriptors,
         Rate::from_mhz(20),
-    )
-    .map_err(|e| anyhow::anyhow!("Failed to create Hub75: {:?}", e))?;
+    ) {
+        Ok(h) => {
+            info!("hub75_task: hardware initialized successfully");
+            h
+        }
+        Err(e) => {
+            info!(
+                "hub75_task: hardware init failed (expected in simulation): {:?}",
+                e
+            );
+            // Sleep forever - hardware not available
+            loop {
+                embassy_time::Timer::after(Duration::from_secs(60)).await;
+            }
+        }
+    };
 
     let mut fps_counter = RateCounter::init(Duration::from_secs(1));
     let mut rate_limiter = RateLimiter::new(300, "hub75");

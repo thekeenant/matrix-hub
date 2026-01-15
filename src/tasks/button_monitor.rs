@@ -33,6 +33,8 @@ pub async fn button_monitor_task(
 
         signal.send(()).await;
 
+        // panic!("Test panic!");
+
         Timer::after(Duration::from_millis(DEBOUNCE_MS)).await;
 
         while button_up.is_low() || button_down.is_low() {

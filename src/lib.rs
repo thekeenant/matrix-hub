@@ -2,6 +2,8 @@
 
 pub mod animation;
 pub mod apps;
+pub mod nvs;
+pub mod gtfs;
 pub mod http;
 pub mod metrics;
 pub mod proto;
@@ -9,6 +11,8 @@ pub mod state;
 pub mod tasks;
 pub mod time;
 pub mod wifi;
+
+pub mod custom_halt;
 
 #[macro_export]
 macro_rules! mk_static {

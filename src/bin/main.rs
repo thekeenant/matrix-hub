@@ -5,7 +5,7 @@
 
 extern crate alloc;
 
-use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 
 use embassy_executor::Spawner;
 use embassy_net::DhcpConfig;
@@ -28,10 +28,7 @@ use matrix_hub::{
     apps::App,
     metrics::RenderMetrics,
     mk_static,
-    proto::app_state::{
-        AppId, AppRotationConfig, Config, MatrixHubState, MtaConfig, StationConfig, WifiConfig,
-        app_id,
-    },
+    proto::app_state::MatrixHubState,
     tasks::{
         FrameBufferExchange,
         accelerometer::accelerometer_task,
@@ -56,6 +53,7 @@ static WRITE_BUFFER: StaticCell<FrameBuffer> = StaticCell::new();
 static READ_BUFFER: StaticCell<FrameBuffer> = StaticCell::new();
 
 esp_bootloader_esp_idf::esp_app_desc!();
+
 #[esp_rtos::main]
 async fn main(spawner: Spawner) {
     esp_println::logger::init_logger(log::LevelFilter::Info);
@@ -153,6 +151,14 @@ async fn main(spawner: Spawner) {
         .spawn(sntp_task(network_stack.clone(), http_client.clone()))
         .expect("Failed to spawn sntp_task");
 
+    info!("init http server task");
+    spawner
+        .spawn(matrix_hub::tasks::http_server::http_server_task(
+            network_stack.clone(),
+            matrix_hub_state.clone(),
+        ))
+        .expect("Failed to spawn http_server_task");
+
     info!("init framebuffer exchange");
     static RENDERED_BUFFER: FrameBufferExchange<FrameBuffer> = FrameBufferExchange::new();
     static FREE_BUFFER: FrameBufferExchange<FrameBuffer> = FrameBufferExchange::new();
@@ -170,40 +176,31 @@ async fn main(spawner: Spawner) {
     };
     info!("read_buffer addr: {:x}", read_buffer as *const _ as usize);
 
-    info!("init config");
+    info!("init config - loading from NVS");
+    let flash_storage = mk_static!(
+        esp_storage::FlashStorage<'static>,
+        esp_storage::FlashStorage::new(peripherals.FLASH)
+    );
+
+    matrix_hub::nvs::register_flash_storage(flash_storage as *mut _);
+
+    if let Ok(Some(bt)) = matrix_hub::nvs::load_backtrace(flash_storage) {
+        if !bt.program_counters.is_empty() {
+            info!(
+                "Stored panic backtrace ({} frames):",
+                bt.program_counters.len()
+            );
+            for pc in bt.program_counters {
+                info!("  0x{:08x}", pc);
+            }
+        }
+    }
+
     {
+        let config =
+            matrix_hub::nvs::load_config(flash_storage).expect("Failed to load config from NVS");
         let mut state = matrix_hub_state.lock().await;
-        state.config = Some(Config {
-            wifi: Some(WifiConfig {
-                ssid: String::from(""),
-                password: String::from(""),
-            }),
-            mta: Some(MtaConfig {
-                stations: alloc::vec![
-                    StationConfig {
-                        route: String::from("L"),
-                        station_id: String::from("L10"),
-                    },
-                    StationConfig {
-                        route: String::from("G"),
-                        station_id: String::from("G29"),
-                    },
-                ],
-            }),
-            app_rotation: Some(AppRotationConfig {
-                enabled_apps: alloc::vec![
-                    AppId {
-                        id: Some(app_id::Id::Mta(app_id::Mta {}))
-                    },
-                    AppId {
-                        id: Some(app_id::Id::Plasma(app_id::Plasma {}))
-                    },
-                    AppId {
-                        id: Some(app_id::Id::Sandbox(app_id::Sandbox {}))
-                    },
-                ],
-            }),
-        });
+        state.config = Some(config);
     }
 
     info!("init apps vec");
@@ -333,6 +330,6 @@ async fn main(spawner: Spawner) {
 
     info!("main: entering idle loop");
     loop {
-        Timer::after(Duration::from_secs(1)).await;
+        Timer::after(Duration::from_secs(10)).await;
     }
 }

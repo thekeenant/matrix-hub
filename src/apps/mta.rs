@@ -28,6 +28,7 @@ use reqwless::request::Method;
 
 use crate::{
     apps::App,
+    gtfs,
     http::fetch,
     proto::{
         app_state::{
@@ -104,54 +105,95 @@ impl<T: DrawTarget<Color = Color>> OriginDimensions for ClippedDisplay<'_, T> {
     }
 }
 
+fn direction_id_from_stop_suffix(direction: &str) -> Option<u8> {
+    // MTA stop_ids end with N/S (and occasionally E/W). Map to GTFS direction_id.
+    match direction {
+        "N" | "E" => Some(0),
+        "S" | "W" => Some(1),
+        _ => None,
+    }
+}
+
 fn get_destination<'a>(route: &str, direction: &'a str) -> &'a str {
-    match (route, direction) {
-        ("L", "N") => "8 Ave",
-        ("L", "S") => "Canarsie-Rockaway Pkwy",
-        ("G", "N") => "Court Sq",
-        ("G", "S") => "Church Ave",
-        ("1", "N") => "Van Cortlandt Pk",
-        ("1", "S") => "South Ferry",
-        ("2", "N") => "Wakefield-241 St",
-        ("2", "S") => "Flatbush Ave",
-        ("3", "N") => "Harlem-148 St",
-        ("3", "S") => "New Lots Ave",
-        ("4", "N") => "Woodlawn",
-        ("4", "S") => "Crown Hts",
-        ("5", "N") => "Nereid Ave",
-        ("5", "S") => "Flatbush Ave",
-        ("6", "N") => "Pelham",
-        ("6", "S") => "Brooklyn Bridge",
-        ("7", "E") => "Flushing-Main St",
-        ("7", "W") => "34 St-Hudson Yds",
-        ("A", "N") => "Inwood-207 St",
-        ("A", "S") => "Far Rockaway",
-        ("C", "N") => "168 St",
-        ("C", "S") => "Euclid Ave",
-        ("E", "E") => "Jamaica Ctr",
-        ("E", "W") => "World Trade Ctr",
-        ("B", "N") => "Bedford Pk Blvd",
-        ("B", "S") => "Brighton Beach",
-        ("D", "N") => "Norwood-205 St",
-        ("D", "S") => "Coney Island-Stillwell Ave",
-        ("F", "N") => "Jamaica-179 St",
-        ("F", "S") => "Coney Island-Stillwell Ave",
-        ("M", "N") => "Forest Hills-71 Ave",
-        ("M", "S") => "Middle Village-Metropolitan Ave",
-        ("N", "N") => "Astoria-Ditmars Blvd",
-        ("N", "S") => "Coney Island-Stillwell Ave",
-        ("Q", "N") => "96 St-2 Ave",
-        ("Q", "S") => "Coney Island-Stillwell Ave",
-        ("R", "N") => "Forest Hills-71 Ave",
-        ("R", "S") => "Bay Ridge-95 St",
-        ("W", "N") => "Astoria-Ditmars Blvd",
-        ("W", "S") => "Whitehall St",
-        ("J", "E") => "Jamaica Ctr",
-        ("J", "W") => "Broad St",
-        ("Z", "E") => "Jamaica Ctr",
-        ("Z", "W") => "Broad St",
+    let Some(direction_id) = direction_id_from_stop_suffix(direction) else {
+        return direction;
+    };
+
+    // Canonical names sourced from docs/trips.csv (trip_headsign).
+    match (route, direction_id) {
+        ("1", 0) => "Van Cortlandt Park-242 St",
+        ("1", 1) => "South Ferry",
+        ("2", 0) => "Wakefield-241 St",
+        ("2", 1) => "Flatbush Av-Brooklyn College",
+        ("3", 0) => "Harlem-148 St",
+        ("3", 1) => "New Lots Av",
+        ("4", 0) => "Woodlawn",
+        ("4", 1) => "Crown Hts-Utica Av",
+        ("5", 0) => "Eastchester-Dyre Av",
+        ("5", 1) => "Bowling Green",
+        ("6", 0) => "Pelham Bay Park",
+        ("6", 1) => "Brooklyn Bridge-City Hall",
+        ("6X", 0) => "Pelham Bay Park",
+        ("6X", 1) => "Brooklyn Bridge-City Hall",
+        ("7", 0) => "Flushing-Main St",
+        ("7", 1) => "34 St-Hudson Yards",
+        ("7X", 0) => "Flushing-Main St",
+        ("7X", 1) => "34 St-Hudson Yards",
+        ("A", 0) => "Inwood-207 St",
+        ("A", 1) => "Far Rockaway-Mott Av",
+        ("B", 0) => "Bedford Park Blvd",
+        ("B", 1) => "Brighton Beach",
+        ("C", 0) => "168 St",
+        ("C", 1) => "Euclid Av",
+        ("D", 0) => "Norwood-205 St",
+        ("D", 1) => "Coney Island-Stillwell Av",
+        ("E", 0) => "Jamaica Center-Parsons/Archer",
+        ("E", 1) => "World Trade Center",
+        ("F", 0) => "Jamaica-179 St",
+        ("F", 1) => "Coney Island-Stillwell Av",
+        ("FX", 0) => "Jamaica-179 St",
+        ("FX", 1) => "Coney Island-Stillwell Av",
+        ("G", 0) => "Court Sq",
+        ("G", 1) => "Church Av",
+        ("J", 0) => "Jamaica Center-Parsons/Archer",
+        ("J", 1) => "Broad St",
+        ("L", 0) => "8 Av",
+        ("L", 1) => "Canarsie-Rockaway Pkwy",
+        ("M", 0) => "Forest Hills-71 Av",
+        ("M", 1) => "Middle Village-Metropolitan Av",
+        ("N", 0) => "Astoria-Ditmars Blvd",
+        ("N", 1) => "Coney Island-Stillwell Av",
+        ("Q", 0) => "96 St",
+        ("Q", 1) => "Coney Island-Stillwell Av",
+        ("R", 0) => "Forest Hills-71 Av",
+        ("R", 1) => "Bay Ridge-95 St",
+        ("W", 0) => "Astoria-Ditmars Blvd",
+        ("W", 1) => "Whitehall St-South Ferry",
+        ("Z", 0) => "Jamaica Center-Parsons/Archer",
+        ("Z", 1) => "Broad St",
+
+        // Shuttles / SIR (route_ids seen in trips.csv)
+        ("GS", 0) => "Times Sq-42 St",
+        ("GS", 1) => "Grand Central-42 St",
+        ("FS", 0) => "Franklin Av",
+        ("FS", 1) => "Prospect Park",
+        ("H", 0) => "Broad Channel",
+        ("H", 1) => "Rockaway Park-Beach 116 St",
+        ("SI", 0) => "St George",
+        ("SI", 1) => "Tottenville",
+
+        // Legacy catch-all for configs that still use "S".
         ("S", _) => "Shuttle",
+
         _ => direction,
+    }
+}
+
+fn get_train_destination<'a>(train: &'a ProtoTrain, platform_direction: &'a str) -> &'a str {
+    if !train.headsign.is_empty() {
+        train.headsign.as_str()
+    } else {
+        get_destination(&train.route, platform_direction)
     }
 }
 
@@ -499,7 +541,7 @@ impl App for MtaApp {
             let mut max_cycle = SCROLL_HOLD_START;
             for platform in &station.platforms {
                 if let Some(train) = platform.trains.first() {
-                    let dest = get_destination(&train.route, &platform.direction);
+                    let dest = get_train_destination(train, &platform.direction);
                     let text_len = (dest.len() * 7) as i32;
                     let avail = (COLS as i32) - (platform.trains.len().min(2) * 25) as i32 - 17;
                     if text_len > avail {
@@ -544,7 +586,7 @@ impl App for MtaApp {
                     display,
                     11 + i as i32 * 16,
                     &train.route,
-                    get_destination(&train.route, &platform.direction),
+                    get_train_destination(train, &platform.direction),
                     &times,
                     scroll_elapsed_millis,
                     max_cycle_ms,
@@ -564,7 +606,7 @@ fn process_feed_single_station(
     let max_minutes_ahead = 30i64;
     let now_secs = feed.header.timestamp.unwrap_or(0);
 
-    let mut arrivals_map: alloc::collections::BTreeMap<String, Vec<(String, u64)>> =
+    let mut arrivals_map: alloc::collections::BTreeMap<String, Vec<(String, u64, String)>> =
         alloc::collections::BTreeMap::new();
 
     for entity in &feed.entity {
@@ -573,6 +615,15 @@ fn process_feed_single_station(
         };
         let trip = &trip_update.trip;
         let trip_route = trip.route_id.as_deref().unwrap_or("?");
+
+        // Use static GTFS (docs/trips.csv) to map trip_id -> trip_headsign.
+        // This is the most accurate destination label for a specific train.
+        let trip_headsign = trip
+            .trip_id
+            .as_deref()
+            .and_then(gtfs::headsign_for_trip_id)
+            .unwrap_or("")
+            .to_string();
 
         if trip_route != route {
             continue;
@@ -601,7 +652,7 @@ fn process_feed_single_station(
                     arrivals_map
                         .entry(stop_id.clone())
                         .or_insert_with(Vec::new)
-                        .push((trip_route.to_string(), arrival_time));
+                        .push((trip_route.to_string(), arrival_time, trip_headsign.clone()));
                 }
             }
         }
@@ -615,12 +666,12 @@ fn process_feed_single_station(
     for (stop_id, mut arrivals) in arrivals_map {
         let direction = stop_id.chars().last().unwrap_or('?').to_string();
 
-        arrivals.sort_by_key(|(_, time)| *time);
+        arrivals.sort_by_key(|(_, time, _)| *time);
 
         let trains: Vec<ProtoTrain> = arrivals
             .iter()
             .take(8)
-            .map(|(r, arrival_time)| {
+            .map(|(r, arrival_time, headsign)| {
                 let arrives_in_secs = if *arrival_time > now_secs {
                     arrival_time - now_secs
                 } else {
@@ -631,6 +682,7 @@ fn process_feed_single_station(
                     route: r.clone(),
                     arrives_at_secs: *arrival_time,
                     arrives_in_secs,
+                    headsign: headsign.clone(),
                 }
             })
             .collect();

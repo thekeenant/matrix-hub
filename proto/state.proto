@@ -59,6 +59,7 @@ message Train {
     string route = 1;
     uint64 arrives_at_secs = 2;
     uint64 arrives_in_secs = 3;
+    string headsign = 4;
 }
 
 message ClockAppState {
@@ -116,4 +117,31 @@ message AppId {
 
 message AppRotationConfig {
     repeated AppId enabled_apps = 1;
+}
+
+message Backtrace {
+    // Program counters (PC) for each captured stack frame.
+    // These correspond to the addresses printed by esp-backtrace.
+    repeated uint32 program_counters = 1;
+}
+
+message KeyValueStorage {
+    enum Key {
+        KEY_UNSPECIFIED = 0;
+        // Matrix configuration.
+        CONFIG = 1;
+        // Application backtrace data in the event of crashes.
+        BACKTRACE = 2;
+    }
+    message Value {
+        oneof value {
+            Config config = 1;
+            Backtrace backtrace = 2;
+        }
+    }
+    message Entry {
+        Key key = 1;
+        Value value = 2;
+    }
+    repeated Entry entries = 1;
 }

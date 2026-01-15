@@ -37,10 +37,12 @@ esp-backtrace = { version = "0.18", features = [
   "esp32s3",
   "panic-handler",
   "println",
+  "custom-halt",
 ] }
 esp-bootloader-esp-idf = { version = "0.4", features = ["esp32s3"] }
 esp-hal = { version = "1.0", features = ["esp32s3", "psram", "unstable"] }
 esp-hub75 = { version = "0.8", features = ["esp32s3", "iram"] }
+esp-nvs = { version = "0.2" }
 lis3dh-async = "0.9"
 esp-println = { version = "0.16", default-features = false, features = [
   "critical-section",
@@ -61,15 +63,30 @@ esp-rtos = { version = "0.2", features = [
   "esp-radio",
   "esp32s3",
 ] }
+esp-storage = { version = "0.8", features = ["esp32s3"] }
+embedded-storage = "0.3"
 heapless = "0.9"
 libm = "0.2"
 log = "0.4"
 micromath = "2.1"
-prost = { version = "0.14.3", default-features = false, features = ["derive"] }
+picoserve = { version = "0.17", default-features = false, features = [
+  "embassy",
+  "json",
+  "alloc",
+] }
 portable-atomic = { version = "1.10", features = ["critical-section"] }
+prost = { version = "0.13", default-features = false, features = [
+  "derive",
+  "prost-derive",
+] }
 reqwless = { version = "0.13", default-features = false, features = [
   "embedded-tls",
 ] }
+serde = { version = "1.0", default-features = false, features = [
+  "derive",
+  "alloc",
+] }
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 smoltcp = { version = "0.12", default-features = false, features = [
   "medium-ethernet",
   "multicast",
@@ -85,7 +102,7 @@ smoltcp = { version = "0.12", default-features = false, features = [
 static_cell = "2.1"
 
 [build-dependencies]
-prost-build = "0.14.3"
+prost-build = "0.13"
 protoc-prebuilt = "0.3"
 
 [lints.rust]
@@ -104,6 +121,10 @@ unwrap_used = "warn"
 [profile.dev]
 # For debug builds always builds with some optimization
 opt-level = "s"
+debug = true    # Enable debug symbols for breakpoints
+
+[profile.dev.package.esp-storage]
+opt-level = 3
 
 [profile.release]
 codegen-units = 1        # LLVM can perform better optimizations using a single thread

@@ -1,6 +1,6 @@
 # Matrix Hub
 
-![MTA App](docs/assets/mta.webp)
+![Demo](docs/assets/demo.gif)
 
 An embedded Rust application for the Adafruit MatrixPortal S3 that drives a 128x32 HUB75 LED matrix display with WiFi-connected apps including NYC MTA subway arrivals, plasma effects, and physics simulations.
 
@@ -64,5 +64,6 @@ wifi: Some(WifiConfig {
 
 ## Demo
 
+![MTA App](docs/assets/mta.webp)
 ![Plasma Effect](docs/assets/colorful.webp)
 ![Case](docs/assets/case.webp)

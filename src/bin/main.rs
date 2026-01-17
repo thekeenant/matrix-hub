@@ -243,6 +243,11 @@ async fn main(spawner: Spawner) {
         info!("Loaded config from KVS into matrix hub state");
     }
 
+    info!("init config save task");
+    spawner
+        .spawn(config_save_task(matrix_hub_state.clone(), kvs.clone()))
+        .expect("Failed to spawn config_save_task");
+
     info!("init apps vec");
     let apps: &'static Mutex<CriticalSectionRawMutex, Vec<Arc<dyn App>>> = mk_static!(
         Mutex<CriticalSectionRawMutex, Vec<Arc<dyn App>>>,
@@ -375,11 +380,6 @@ async fn main(spawner: Spawner) {
             button_press_signal,
         ))
         .expect("Failed to spawn app_controller_task");
-
-    info!("init config save task");
-    spawner
-        .spawn(config_save_task(matrix_hub_state.clone(), kvs.clone()))
-        .expect("Failed to spawn config_save_task");
 
     info!("main: entering idle loop");
     loop {

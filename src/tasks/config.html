@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Matrix Hub Config</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.2/ace.js"></script>
+</head>
+
+<body class="bg-gray-900 text-gray-100 p-8 max-w-6xl mx-auto">
+  <h1 class="text-3xl font-bold mb-6 text-gray-100">Matrix Hub Configuration</h1>
+  {{post_message}}
+  <div id="status" class="hidden p-4 mb-4 rounded-lg font-semibold"></div>
+  <form method="post" id="configForm">
+    <div id="editor" class="w-full h-[600px] border border-gray-700 rounded-lg mb-4"></div>
+    <textarea name="config" id="hiddenConfig" style="display: none;" required></textarea>
+    <button type="submit" id="submitBtn"
+      class="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg disabled:bg-gray-700 disabled:text-gray-400 disabled:cursor-not-allowed transition-colors">Update
+      Config</button>
+  </form>
+
+  <script>
+    console.log('Config page loaded');
+
+    const editor = ace.edit("editor");
+    console.log('Ace editor initialized:', editor);
+
+    editor.setTheme("ace/theme/monokai");
+    editor.session.setMode("ace/mode/json");
+    editor.setValue(`{{config_json}}`, -1);
+    editor.setOptions({
+      fontSize: "14px",
+      showPrintMargin: false
+    });
+
+    const statusDiv = document.getElementById('status');
+    const submitBtn = document.getElementById('submitBtn');
+    const hiddenConfig = document.getElementById('hiddenConfig');
+    const form = document.getElementById('configForm');
+
+    function validateJSON() {
+      const content = editor.getValue();
+      console.log('Validating JSON, length:', content.length);
+      try {
+        JSON.parse(content);
+        statusDiv.textContent = '✓ Valid JSON';
+        statusDiv.className = 'p-4 mb-4 rounded-lg font-semibold bg-green-900 text-green-400 border border-green-700';
+        statusDiv.classList.remove('hidden');
+        submitBtn.disabled = false;
+        hiddenConfig.value = content;
+        console.log('Valid JSON');
+        return true;
+      } catch (e) {
+        statusDiv.textContent = '✗ Invalid JSON: ' + e.message;
+        statusDiv.className = 'p-4 mb-4 rounded-lg font-semibold bg-red-900 text-red-400 border border-red-700';
+        statusDiv.classList.remove('hidden');
+        submitBtn.disabled = true;
+        console.error('Invalid JSON:', e.message);
+        return false;
+      }
+    }
+
+    editor.session.on('change', function () {
+      console.log('Editor content changed');
+      validateJSON();
+    });
+
+    // Initial validation
+    setTimeout(() => {
+      console.log('Running initial validation');
+      validateJSON();
+    }, 100);
+
+    form.addEventListener('submit', (e) => {
+      console.log('Form submit attempted');
+      if (!validateJSON()) {
+        e.preventDefault();
+        console.log('Form submission prevented due to invalid JSON');
+      }
+    });
+  </script>
+</body>
+
+</html>

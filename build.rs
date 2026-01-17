@@ -7,6 +7,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = prost_build::Config::new();
     config.btree_map(&["."]);
     config.protoc_executable(protoc_bin);
+    config.type_attribute(".", "#[derive(serde::Serialize,serde::Deserialize)]");
     config.compile_protos(
         &[
             "proto/com/google/transit/realtime/gtfs-realtime.proto",

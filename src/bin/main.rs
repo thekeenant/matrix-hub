@@ -185,8 +185,8 @@ async fn main(spawner: Spawner) {
     info!("init KVS");
     let default_config = Config {
         wifi: Some(WifiConfig {
-            ssid: option_env!("WIFI_SSID").unwrap_or("").into(),
-            password: option_env!("WIFI_PASSWORD").unwrap_or("").into(),
+            ssid: env!("WIFI_SSID").into(),
+            password: env!("WIFI_PASSWORD").into(),
         }),
         mta: Some(MtaConfig {
             stations: alloc::vec![

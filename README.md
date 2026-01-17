@@ -24,9 +24,11 @@ An embedded Rust application for the Adafruit MatrixPortal S3 that drives a 128x
 **Runtime:**
 
 - Dual-core async execution using Embassy
-- Core 0: WiFi, apps, HTTP, SNTP time sync
+- Core 0: WiFi, apps, HTTP server, SNTP time sync
 - Core 1: Display rendering at ~50 FPS, HUB75 DMA refresh at 500+ FPS
 - Automatic app rotation with configurable intervals
+- Web-based configuration interface on port 80
+- Persistent configuration storage in NVS flash
 
 ## Building & Flashing
 
@@ -38,8 +40,14 @@ An embedded Rust application for the Adafruit MatrixPortal S3 that drives a 128x
 **Build and flash:**
 
 ```bash
+# Create a .env file with your WiFi credentials
+echo 'WIFI_SSID=YourNetworkName' > .env
+echo 'WIFI_PASSWORD=YourPassword' >> .env
+
 cargo run --release
 ```
+
+The `.env` file is loaded at build time and used as the default configuration.
 
 **Windows users:** You need to attach your USB device to WSL before flashing:
 
@@ -53,14 +61,30 @@ usbipd attach --wsl --busid 1-1
 
 ## Configuration
 
-WiFi credentials and MTA station configuration are hardcoded in [src/bin/main.rs](src/bin/main.rs#L177-L179). Edit these values before building:
+### Initial Setup
 
-```rust
-wifi: Some(WifiConfig {
-    ssid: String::from("YOUR_SSID"),
-    password: String::from("YOUR_PASSWORD"),
-}),
+Create a `.env` file in the project root with your WiFi credentials:
+
+```bash
+WIFI_SSID=YourNetworkName
+WIFI_PASSWORD=YourPassword
 ```
+
+These values are loaded at build time and used as the default configuration. The `.env` file is git-ignored for security.
+
+### Web Interface
+
+Once connected to WiFi, access the configuration web interface at the device's IP address on port 80. The interface provides:
+
+- Main landing page with navigation
+- Interactive JSON configuration editor with live validation
+- Real-time device state viewer
+
+Configuration changes made through the web interface are automatically persisted to flash storage and will survive reboots.
+
+### Manual Configuration
+
+You can also edit the default configuration in [src/bin/main.rs](src/bin/main.rs#L177-L179) before building.
 
 ## Demo
 

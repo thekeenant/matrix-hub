@@ -1,4 +1,13 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Load .env file if it exists and load them for the Rust compiler.
+    let _ = dotenvy::dotenv();
+    if let Ok(ssid) = std::env::var("WIFI_SSID") {
+        println!("cargo:rustc-env=WIFI_SSID={}", ssid);
+    }
+    if let Ok(password) = std::env::var("WIFI_PASSWORD") {
+        println!("cargo:rustc-env=WIFI_PASSWORD={}", password);
+    }
+
     linker_be_nice()?;
     println!("cargo:rustc-link-arg=-Tlinkall.x");
 

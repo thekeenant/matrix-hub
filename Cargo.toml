@@ -98,6 +98,7 @@ smoltcp = { version = "0.12", default-features = false, features = [
 static_cell = "2.1"
 
 [build-dependencies]
+dotenvy = "0.15"
 prost-build = "0.14.3"
 protoc-prebuilt = "0.3"
 

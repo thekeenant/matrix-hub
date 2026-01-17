@@ -124,6 +124,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b7e4c2464d97fe331d41de9d5db0def0a96f4d823b8b32a2efd503578988973"
 
 [[package]]
+name = "bare-metal"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8fe8f5a8a398345e52358e18ff07cc17a568fbca5c6f73873d3a62056309603"
+
+[[package]]
 name = "base16ct"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -901,7 +907,7 @@ dependencies = [
  "heapless 0.9.2",
  "riscv",
  "semihosting",
- "xtensa-lx",
+ "xtensa-lx 0.13.0",
 ]
 
 [[package]]
@@ -985,7 +991,7 @@ dependencies = [
  "riscv",
  "strum",
  "ufmt-write",
- "xtensa-lx",
+ "xtensa-lx 0.13.0",
  "xtensa-lx-rt",
 ]
 
@@ -1139,6 +1145,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "esp-storage"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1495fc1f5549bdd840b52d9ceb201746200e1620d2636f46958c11e765623b80"
+dependencies = [
+ "document-features",
+ "embedded-storage",
+ "esp-hal",
+ "esp-hal-procmacros",
+ "esp-metadata-generated",
+ "esp-rom-sys",
+ "esp-sync",
+]
+
+[[package]]
 name = "esp-sync"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1150,7 +1171,7 @@ dependencies = [
  "embassy-sync 0.7.2",
  "esp-metadata-generated",
  "riscv",
- "xtensa-lx",
+ "xtensa-lx 0.13.0",
 ]
 
 [[package]]
@@ -1810,6 +1831,7 @@ dependencies = [
  "embedded-io 0.7.1",
  "embedded-io-async 0.7.0",
  "embedded-nal-async 0.9.0",
+ "embedded-storage",
  "esp-alloc",
  "esp-backtrace",
  "esp-bootloader-esp-idf",
@@ -1818,6 +1840,7 @@ dependencies = [
  "esp-println",
  "esp-radio",
  "esp-rtos",
+ "esp-storage",
  "heapless 0.9.2",
  "libm",
  "lis3dh-async",
@@ -1830,6 +1853,7 @@ dependencies = [
  "reqwless",
  "smoltcp",
  "static_cell",
+ "xtensa-lx 0.9.0",
 ]
 
 [[package]]
@@ -1868,6 +1892,12 @@ name = "multimap"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d87ecb2933e8aeadb3e3a02b828fed80a7528047e68b4f424523a0981a3a084"
+
+[[package]]
+name = "mutex-trait"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4bb1638d419e12f8b1c43d9e639abd0d1424285bdea2f76aa231e233c63cd3a"
 
 [[package]]
 name = "nb"
@@ -2936,6 +2966,16 @@ checksum = "9edde0db4769d2dc68579893f2306b26c6ecfbe0ef499b013d731b7b9247e0b9"
 
 [[package]]
 name = "xtensa-lx"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e758f94e1a1f71758f94052a2766dcb12604998eb372b8b2e30576e3ab1ba1e6"
+dependencies = [
+ "bare-metal",
+ "mutex-trait",
+]
+
+[[package]]
+name = "xtensa-lx"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e012d667b0aa6d2592ace8ef145a98bff3e76cca7a644f4181ecd7a916ed289b"
@@ -2950,7 +2990,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8709f037fb123fe7ff146d2bce86f9dc0dfc53045c016bfd9d703317b6502845"
 dependencies = [
  "document-features",
- "xtensa-lx",
+ "xtensa-lx 0.13.0",
  "xtensa-lx-rt-proc-macros",
 ]
 

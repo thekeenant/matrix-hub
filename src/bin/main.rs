@@ -18,6 +18,7 @@ use esp_hal::{
     i2c::master::{Config as I2cConfig, I2c},
     interrupt::{Priority, software::SoftwareInterruptControl},
     rng::Rng,
+    system::CpuControl,
     time::Rate,
     timer::timg::TimerGroup,
 };
@@ -28,18 +29,21 @@ use matrix_hub::{
     apps::App,
     metrics::RenderMetrics,
     mk_static,
+    nvs::{CORE_1_PAUSED, Kvs},
     proto::app_state::{
-        AppId, AppRotationConfig, Config, MatrixHubState, MtaConfig, StationConfig, WifiConfig,
-        app_id,
+        AppId, AppRotationConfig, Config, KeyValueStorage, MatrixHubState, MtaConfig,
+        StationConfig, WifiConfig, app_id, key_value_storage,
     },
     tasks::{
         FrameBufferExchange,
         accelerometer::accelerometer_task,
         app_controller::app_controller_task,
         button_monitor::{ButtonPressSignal, button_monitor_task},
+        config_save::config_save_task,
         display::display_task,
         hub75::{FrameBuffer, Hub75Brightness, Hub75Peripherals, hub75_task},
         sntp::sntp_task,
+        wait_for_flash_busy::wait_for_flash_busy_task,
         wifi_connection::wifi_connection_task,
         wifi_net::wifi_net_task,
     },
@@ -170,40 +174,73 @@ async fn main(spawner: Spawner) {
     };
     info!("read_buffer addr: {:x}", read_buffer as *const _ as usize);
 
-    info!("init config");
+    info!("init KVS");
+    let default_config = Config {
+        wifi: Some(WifiConfig {
+            ssid: option_env!("WIFI_SSID").unwrap_or("").into(),
+            password: option_env!("WIFI_PASSWORD").unwrap_or("").into(),
+        }),
+        mta: Some(MtaConfig {
+            stations: alloc::vec![
+                StationConfig {
+                    route: String::from("L"),
+                    station_id: String::from("L10"),
+                },
+                StationConfig {
+                    route: String::from("G"),
+                    station_id: String::from("G29"),
+                },
+            ],
+        }),
+        app_rotation: Some(AppRotationConfig {
+            enabled_apps: alloc::vec![
+                AppId {
+                    id: Some(app_id::Id::Mta(app_id::Mta {}))
+                },
+                AppId {
+                    id: Some(app_id::Id::Plasma(app_id::Plasma {}))
+                },
+                AppId {
+                    id: Some(app_id::Id::Sandbox(app_id::Sandbox {}))
+                },
+            ],
+        }),
+    };
+    let fallback_kvs = {
+        KeyValueStorage {
+            entries: alloc::vec![key_value_storage::Entry {
+                key: key_value_storage::Key::Config as i32,
+                value: Some(key_value_storage::Value {
+                    value_oneof: Some(key_value_storage::value::ValueOneof::Config(
+                        default_config.clone()
+                    )),
+                }),
+            }],
+        }
+    };
+    let kvs = Arc::new(Mutex::<CriticalSectionRawMutex, _>::new(Kvs::open(
+        esp_storage::FlashStorage::new(peripherals.FLASH),
+        CpuControl::new(peripherals.CPU_CTRL),
+        fallback_kvs,
+    )));
+
+    info!("init matrix hub state config from KVS");
     {
-        let mut state = matrix_hub_state.lock().await;
-        state.config = Some(Config {
-            wifi: Some(WifiConfig {
-                ssid: String::from(""),
-                password: String::from(""),
-            }),
-            mta: Some(MtaConfig {
-                stations: alloc::vec![
-                    StationConfig {
-                        route: String::from("L"),
-                        station_id: String::from("L10"),
-                    },
-                    StationConfig {
-                        route: String::from("G"),
-                        station_id: String::from("G29"),
-                    },
-                ],
-            }),
-            app_rotation: Some(AppRotationConfig {
-                enabled_apps: alloc::vec![
-                    AppId {
-                        id: Some(app_id::Id::Mta(app_id::Mta {}))
-                    },
-                    AppId {
-                        id: Some(app_id::Id::Plasma(app_id::Plasma {}))
-                    },
-                    AppId {
-                        id: Some(app_id::Id::Sandbox(app_id::Sandbox {}))
-                    },
-                ],
-            }),
-        });
+        let kvs_lock = kvs.lock().await;
+        // This is probably horribly written and not efficient, but it works.
+        // We want to fall back to the default config, no matter what.
+        let config = kvs_lock
+            .get(key_value_storage::Key::Config)
+            .map(|v| v.value_oneof.clone())
+            .flatten()
+            .map(|value_oneof| match value_oneof {
+                key_value_storage::value::ValueOneof::Config(c) => Some(c),
+                _ => None,
+            })
+            .flatten()
+            .unwrap_or(default_config.clone());
+        matrix_hub_state.lock().await.config = Some(config);
+        info!("Loaded config from KVS into matrix hub state");
     }
 
     info!("init apps vec");
@@ -271,8 +308,9 @@ async fn main(spawner: Spawner) {
         clock: peripherals.GPIO2.degrade(),
         latch: peripherals.GPIO47.degrade(),
     };
+    let cpu_ctrl = unsafe { esp_hal::peripherals::CPU_CTRL::<'static>::steal() };
     esp_rtos::start_second_core(
-        peripherals.CPU_CTRL,
+        cpu_ctrl,
         sw_ints.software_interrupt0,
         sw_ints.software_interrupt1,
         mk_static!(
@@ -280,6 +318,8 @@ async fn main(spawner: Spawner) {
             esp_hal::system::Stack::new()
         ),
         {
+            CORE_1_PAUSED.store(false, core::sync::atomic::Ordering::Release);
+
             let matrix_hub_state = matrix_hub_state.clone();
             let hub75_target_hz = hub75_target_hz.clone();
             move || {
@@ -314,6 +354,11 @@ async fn main(spawner: Spawner) {
                             render_metrics.ticks_per_second,
                         ))
                         .expect("Failed to spawn display_task");
+
+                    info!("init wait_for_flash_busy task");
+                    spawner
+                        .spawn(wait_for_flash_busy_task())
+                        .expect("Failed to spawn wait_for_flash_busy_task");
                 });
             }
         },
@@ -331,8 +376,13 @@ async fn main(spawner: Spawner) {
         ))
         .expect("Failed to spawn app_controller_task");
 
+    info!("init config save task");
+    spawner
+        .spawn(config_save_task(matrix_hub_state.clone(), kvs.clone()))
+        .expect("Failed to spawn config_save_task");
+
     info!("main: entering idle loop");
     loop {
-        Timer::after(Duration::from_secs(1)).await;
+        Timer::after(Duration::from_secs(3)).await;
     }
 }

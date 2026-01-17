@@ -5,9 +5,11 @@ extern crate alloc;
 pub mod accelerometer;
 pub mod app_controller;
 pub mod button_monitor;
+pub mod config_save;
 pub mod display;
 pub mod hub75;
 pub mod sntp;
+pub mod wait_for_flash_busy;
 pub mod wifi_connection;
 pub mod wifi_net;
 

@@ -117,3 +117,26 @@ message AppId {
 message AppRotationConfig {
     repeated AppId enabled_apps = 1;
 }
+
+message Backtrace {
+    // TODO
+}
+
+message KeyValueStorage {
+    enum Key {
+        KEY_UNSPECIFIED = 0;
+        CONFIG = 1;
+        CRASH_BACKTRACE = 2;
+    }
+    message Value {
+        oneof value_oneof {
+            Config config = 1;
+            Backtrace backtrace = 2;
+        }
+    }
+    message Entry {
+        Key key = 1;
+        Value value = 2;
+    }
+    repeated Entry entries = 1;
+}

@@ -4,6 +4,7 @@ pub mod animation;
 pub mod apps;
 pub mod http;
 pub mod metrics;
+pub mod nvs;
 pub mod proto;
 pub mod state;
 pub mod tasks;

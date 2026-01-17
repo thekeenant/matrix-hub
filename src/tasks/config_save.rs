@@ -25,7 +25,7 @@ pub async fn config_save_task(
     let mut last_saved_config: Option<Config> = None;
 
     loop {
-        Timer::after(Duration::from_secs(5)).await;
+        Timer::after(Duration::from_millis(300)).await;
 
         let current_config = {
             let state = matrix_hub_state.lock().await;

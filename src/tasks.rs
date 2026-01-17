@@ -7,6 +7,7 @@ pub mod app_controller;
 pub mod button_monitor;
 pub mod config_save;
 pub mod display;
+pub mod http_server;
 pub mod hub75;
 pub mod sntp;
 pub mod wait_for_flash_busy;

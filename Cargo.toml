@@ -68,11 +68,21 @@ heapless = "0.9"
 libm = "0.2"
 log = "0.4"
 micromath = "2.1"
+picoserve = { version = "0.17", default-features = false, features = [
+  "embassy",
+  "json",
+  "alloc",
+] }
 prost = { version = "0.14.3", default-features = false, features = ["derive"] }
 portable-atomic = { version = "1.10", features = ["critical-section"] }
 reqwless = { version = "0.13", default-features = false, features = [
   "embedded-tls",
 ] }
+serde = { version = "1.0", default-features = false, features = [
+  "derive",
+  "alloc",
+] }
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 smoltcp = { version = "0.12", default-features = false, features = [
   "medium-ethernet",
   "multicast",

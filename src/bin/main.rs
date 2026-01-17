@@ -157,6 +157,14 @@ async fn main(spawner: Spawner) {
         .spawn(sntp_task(network_stack.clone(), http_client.clone()))
         .expect("Failed to spawn sntp_task");
 
+    info!("init http server task");
+    spawner
+        .spawn(matrix_hub::tasks::http_server::http_server_task(
+            network_stack.clone(),
+            matrix_hub_state.clone(),
+        ))
+        .expect("Failed to spawn http_server_task");
+
     info!("init framebuffer exchange");
     static RENDERED_BUFFER: FrameBufferExchange<FrameBuffer> = FrameBufferExchange::new();
     static FREE_BUFFER: FrameBufferExchange<FrameBuffer> = FrameBufferExchange::new();

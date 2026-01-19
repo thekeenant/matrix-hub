@@ -8,13 +8,15 @@ use embassy_time::{Duration, Timer};
 use esp_hal::gpio::Input;
 use log::info;
 
+use crate::app_rotation::{AppRotationDirection, AppRotationSignal};
+
 pub type ButtonPressSignal = Channel<CriticalSectionRawMutex, (), 1>;
 
 #[embassy_executor::task]
 pub async fn button_monitor_task(
     mut button_up: Input<'static>,
     mut button_down: Input<'static>,
-    signal: &'static ButtonPressSignal,
+    rotation_signal: &'static AppRotationSignal,
 ) {
     use embassy_futures::select::Either;
     const DEBOUNCE_MS: u64 = 200;
@@ -26,12 +28,18 @@ pub async fn button_monitor_task(
         )
         .await;
 
-        match which {
-            Either::First(_) => info!("UP button pressed!"),
-            Either::Second(_) => info!("DOWN button pressed!"),
-        }
+        let direction = match which {
+            Either::First(_) => {
+                info!("UP button pressed!");
+                AppRotationDirection::Prev
+            }
+            Either::Second(_) => {
+                info!("DOWN button pressed!");
+                AppRotationDirection::Next
+            }
+        };
 
-        signal.send(()).await;
+        rotation_signal.signal(direction);
 
         Timer::after(Duration::from_millis(DEBOUNCE_MS)).await;
 

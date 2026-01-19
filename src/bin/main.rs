@@ -9,7 +9,7 @@ use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
 
 use embassy_executor::Spawner;
 use embassy_net::DhcpConfig;
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, mutex::Mutex};
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
 use esp_hal::{
@@ -26,6 +26,7 @@ use esp_radio::wifi::WifiMode;
 use esp_rtos::embassy::{Executor, InterruptExecutor};
 use log::info;
 use matrix_hub::{
+    app_rotation::AppRotationSignal,
     apps::App,
     metrics::RenderMetrics,
     mk_static,
@@ -38,7 +39,7 @@ use matrix_hub::{
         FrameBufferExchange,
         accelerometer::accelerometer_task,
         app_controller::app_controller_task,
-        button_monitor::{ButtonPressSignal, button_monitor_task},
+        button_monitor::button_monitor_task,
         config_save::config_save_task,
         display::display_task,
         hub75::{FrameBuffer, Hub75Brightness, Hub75Peripherals, hub75_task},
@@ -157,11 +158,15 @@ async fn main(spawner: Spawner) {
         .spawn(sntp_task(network_stack.clone(), http_client.clone()))
         .expect("Failed to spawn sntp_task");
 
+    info!("init app rotation signal");
+    let app_rotation_signal = mk_static!(AppRotationSignal, embassy_sync::signal::Signal::new());
+
     info!("init http server task");
     spawner
         .spawn(matrix_hub::tasks::http_server::http_server_task(
             network_stack.clone(),
             matrix_hub_state.clone(),
+            app_rotation_signal,
         ))
         .expect("Failed to spawn http_server_task");
 
@@ -280,9 +285,6 @@ async fn main(spawner: Spawner) {
     info!("init metrics");
     let render_metrics = RenderMetrics::new();
 
-    info!("init button press signal");
-    let button_press_signal = mk_static!(ButtonPressSignal, Channel::new());
-
     info!("init buttons");
     let button_up = Input::new(
         peripherals.GPIO6,
@@ -296,7 +298,7 @@ async fn main(spawner: Spawner) {
         .spawn(button_monitor_task(
             button_up,
             button_down,
-            button_press_signal,
+            app_rotation_signal,
         ))
         .expect("Failed to spawn button_monitor_task");
 
@@ -385,7 +387,7 @@ async fn main(spawner: Spawner) {
             matrix_hub_state.clone(),
             http_client.clone(),
             hub75_target_hz.clone(),
-            button_press_signal,
+            app_rotation_signal,
         ))
         .expect("Failed to spawn app_controller_task");
 

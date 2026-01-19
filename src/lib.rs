@@ -1,6 +1,7 @@
 #![no_std]
 
 pub mod animation;
+pub mod app_rotation;
 pub mod apps;
 pub mod http;
 pub mod metrics;

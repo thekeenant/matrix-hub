@@ -48,7 +48,15 @@ impl App for SandboxApp {
         {
             let mut state = self.state.lock().await;
             let sandbox = state.sandbox.get_or_insert_default();
-            if sandbox.particles.is_empty() {
+
+            // Always ensure we have MAX_PARTICLES
+            if sandbox.particles.len() < MAX_PARTICLES {
+                info!(
+                    "Initializing particles: current={}, target={}",
+                    sandbox.particles.len(),
+                    MAX_PARTICLES
+                );
+                sandbox.particles.clear();
                 let mut particles = Vec::new();
                 for _ in 0..MAX_PARTICLES {
                     particles.push(Particle {
@@ -65,6 +73,7 @@ impl App for SandboxApp {
                 }
                 sandbox.particles = particles;
             }
+
             info!("Initializing {} particles", sandbox.particles.len());
             for (i, particle) in sandbox.particles.iter_mut().enumerate() {
                 particle.active = true;

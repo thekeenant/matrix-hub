@@ -7,16 +7,26 @@ extern crate alloc;
 use embassy_net::tcp::TcpSocket;
 use embassy_time::Duration;
 use log::info;
-use picoserve::{response::Content, routing::get};
+use picoserve::{
+    response::Content,
+    routing::{get, post},
+};
 
 use crate::{
-    proto::app_state::MatrixHubState, state::SharedMatrixHubState, wifi::SharedNetworkStack,
+    app_rotation::{AppRotationDirection, AppRotationSignal},
+    proto::app_state::MatrixHubState,
+    state::SharedMatrixHubState,
+    wifi::SharedNetworkStack,
 };
 
 /// HTTP server task - serves configuration and status endpoints
 #[embassy_executor::task]
-pub async fn http_server_task(stack: SharedNetworkStack, state: SharedMatrixHubState) {
-    http_server_task_impl(stack, state)
+pub async fn http_server_task(
+    stack: SharedNetworkStack,
+    state: SharedMatrixHubState,
+    app_rotation_signal: &'static AppRotationSignal,
+) {
+    http_server_task_impl(stack, state, app_rotation_signal)
         .await
         .expect("HTTP server task failed");
 }
@@ -24,6 +34,7 @@ pub async fn http_server_task(stack: SharedNetworkStack, state: SharedMatrixHubS
 async fn http_server_task_impl(
     stack: SharedNetworkStack,
     state: SharedMatrixHubState,
+    app_rotation_signal: &'static AppRotationSignal,
 ) -> anyhow::Result<()> {
     info!("HTTP server: Waiting for IP address...");
 
@@ -43,8 +54,10 @@ async fn http_server_task_impl(
         .route("/", get(index))
         .route("/state", get(state_handler))
         .route("/config", get(config).post(config_update))
+        .route("/next", post(next_app))
+        .route("/prev", post(prev_app))
         .route("/styles.css", get(styles_css))
-        .with_state(state);
+        .with_state((state, app_rotation_signal));
 
     let config = picoserve::Config::new(picoserve::Timeouts {
         start_read_request: Some(Duration::from_secs(5)),
@@ -91,7 +104,7 @@ async fn http_server_task_impl(
 }
 
 async fn index(
-    _state: picoserve::extract::State<SharedMatrixHubState>,
+    _state: picoserve::extract::State<(SharedMatrixHubState, &'static AppRotationSignal)>,
 ) -> ((&'static str, &'static str), &'static str) {
     (
         ("Content-Type", "text/html; charset=utf-8"),
@@ -115,19 +128,47 @@ impl Content for Css {
     }
 }
 
-async fn styles_css(_state: picoserve::extract::State<SharedMatrixHubState>) -> Css {
+async fn styles_css(
+    _state: picoserve::extract::State<(SharedMatrixHubState, &'static AppRotationSignal)>,
+) -> Css {
     Css(include_str!("styles.css"))
 }
 
 async fn state_handler(
-    picoserve::extract::State(state): picoserve::extract::State<SharedMatrixHubState>,
+    picoserve::extract::State((state, _)): picoserve::extract::State<(
+        SharedMatrixHubState,
+        &'static AppRotationSignal,
+    )>,
 ) -> picoserve::response::Json<MatrixHubState> {
     let hub_state = state.lock().await.clone();
     picoserve::response::Json(hub_state)
 }
 
+async fn next_app(
+    picoserve::extract::State((_, rotation_signal)): picoserve::extract::State<(
+        SharedMatrixHubState,
+        &'static AppRotationSignal,
+    )>,
+) -> &'static str {
+    rotation_signal.signal(AppRotationDirection::Next);
+    "OK"
+}
+
+async fn prev_app(
+    picoserve::extract::State((_, rotation_signal)): picoserve::extract::State<(
+        SharedMatrixHubState,
+        &'static AppRotationSignal,
+    )>,
+) -> &'static str {
+    rotation_signal.signal(AppRotationDirection::Prev);
+    "OK"
+}
+
 async fn config(
-    picoserve::extract::State(state): picoserve::extract::State<SharedMatrixHubState>,
+    picoserve::extract::State((state, _)): picoserve::extract::State<(
+        SharedMatrixHubState,
+        &'static AppRotationSignal,
+    )>,
 ) -> ((&'static str, &'static str), impl Content) {
     let html_template = include_str!("config.html");
     let hub_state_json =
@@ -139,7 +180,10 @@ async fn config(
 }
 
 async fn config_update(
-    picoserve::extract::State(state): picoserve::extract::State<SharedMatrixHubState>,
+    picoserve::extract::State((state, _)): picoserve::extract::State<(
+        SharedMatrixHubState,
+        &'static AppRotationSignal,
+    )>,
     picoserve::extract::Form(form): picoserve::extract::Form<ConfigUpdateForm>,
 ) -> ((&'static str, &'static str), impl Content) {
     let html_template = include_str!("config.html");

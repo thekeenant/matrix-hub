@@ -15,10 +15,11 @@ use embassy_time::{Duration, Timer};
 use log::info;
 
 use crate::{
+    app_rotation::AppRotationSignal,
     apps::{App, mta::MtaApp, plasma::PlasmaApp, sandbox::SandboxApp},
     proto::app_state::{AppId, app_id},
     state::SharedMatrixHubState,
-    tasks::{button_monitor::ButtonPressSignal, hub75::Hub75Brightness},
+    tasks::hub75::Hub75Brightness,
     wifi::SharedHttpTcpClient,
 };
 
@@ -29,7 +30,7 @@ pub async fn app_controller_task(
     matrix_hub_state: SharedMatrixHubState,
     http_client: SharedHttpTcpClient,
     hub75_brightness: Arc<Hub75Brightness>,
-    button_press_signal: &'static ButtonPressSignal,
+    rotation_signal: &'static AppRotationSignal,
 ) {
     app_controller_impl(
         spawner,
@@ -37,7 +38,7 @@ pub async fn app_controller_task(
         matrix_hub_state,
         http_client,
         hub75_brightness,
-        button_press_signal,
+        rotation_signal,
     )
     .await
     .expect("App controller failed");
@@ -49,7 +50,7 @@ async fn app_controller_impl(
     matrix_hub_state: SharedMatrixHubState,
     http_client: SharedHttpTcpClient,
     _hub75_brightness: Arc<Hub75Brightness>,
-    button_press_signal: &'static ButtonPressSignal,
+    rotation_signal: &'static AppRotationSignal,
 ) -> anyhow::Result<()> {
     info!("AppController: starting");
 
@@ -141,20 +142,34 @@ async fn app_controller_impl(
         };
 
         let app_future = current_app.run(http_client.clone());
-        let button_future = button_press_signal.receive();
+        let rotation_future = rotation_signal.wait();
 
         let app_id = current_app.id();
-        match select(app_future, button_future).await {
+        let direction = match select(app_future, rotation_future).await {
             Either::First(_) => {
                 info!("App {:?} completed its run() early", app_id);
+                crate::app_rotation::AppRotationDirection::Next
             }
-            Either::Second(_) => {
-                info!("Rotating from app {:?} due to button press", app_id);
+            Either::Second(dir) => {
+                info!(
+                    "Rotating from app {:?} due to rotation signal: {:?}",
+                    app_id, dir
+                );
+                dir
             }
-        }
+        };
 
-        // Rotate to next app
-        let next_index = (current_index + 1) % num_apps;
+        // Rotate to next or previous app based on direction
+        let next_index = match direction {
+            crate::app_rotation::AppRotationDirection::Next => (current_index + 1) % num_apps,
+            crate::app_rotation::AppRotationDirection::Prev => {
+                if current_index == 0 {
+                    num_apps - 1
+                } else {
+                    current_index - 1
+                }
+            }
+        };
         {
             let apps_guard = apps.lock().await;
             let next_app_id = apps_guard[next_index].id();

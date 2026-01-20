@@ -107,10 +107,12 @@ message AppId {
     message Mta {}
     message Plasma {}
     message Sandbox {}
+    message AppScript {}
     oneof id {
         Mta mta = 1;
         Plasma plasma = 2;
         Sandbox sandbox = 3;
+        AppScript app_script = 4;
     }
 }
 

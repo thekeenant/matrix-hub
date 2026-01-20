@@ -3,14 +3,14 @@
 //! This task waits for WiFi connection and then periodically syncs the system time
 //! with an NTP server.
 
-use embassy_net::udp::{PacketMetadata, UdpSocket};
+use embassy_net::{
+    Stack,
+    udp::{PacketMetadata, UdpSocket},
+};
 use embassy_time::{Duration, Instant, Timer};
 use log::{info, warn};
 
-use crate::{
-    time::current_time_blocking,
-    wifi::{SharedHttpTcpClient, SharedNetworkStack},
-};
+use crate::{time::current_time_blocking, wifi::SharedHttpTcpClient};
 
 const NTP_SERVER: &str = "pool.ntp.org";
 const NTP_PORT: u16 = 123;
@@ -19,14 +19,14 @@ const RETRY_DELAY: Duration = Duration::from_secs(10);
 
 /// SNTP client task - syncs time with NTP server periodically
 #[embassy_executor::task]
-pub async fn sntp_task(stack: SharedNetworkStack, http_client: SharedHttpTcpClient) {
+pub async fn sntp_task(stack: Stack<'static>, http_client: SharedHttpTcpClient) {
     sntp_task_impl(stack, http_client)
         .await
         .expect("SNTP task failed");
 }
 
 async fn sntp_task_impl(
-    stack: SharedNetworkStack,
+    stack: Stack<'static>,
     http_client: SharedHttpTcpClient,
 ) -> anyhow::Result<()> {
     loop {
@@ -47,13 +47,10 @@ async fn sntp_task_impl(
     }
 }
 
-async fn sync_time(
-    http_client: SharedHttpTcpClient,
-    stack: SharedNetworkStack,
-) -> anyhow::Result<()> {
+async fn sync_time(http_client: SharedHttpTcpClient, stack: Stack<'static>) -> anyhow::Result<()> {
     info!("SNTP: Starting time sync");
     let _http_client_guard = http_client.lock().await;
-    let stack = stack.lock().await;
+    let stack = stack;
 
     // Resolve NTP server address
     let addrs = stack
@@ -74,7 +71,7 @@ async fn sync_time(
     let mut tx_buffer = [0u8; 256];
 
     let mut socket = UdpSocket::new(
-        *stack,
+        stack,
         &mut rx_meta,
         &mut rx_buffer,
         &mut tx_meta,

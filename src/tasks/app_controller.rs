@@ -97,6 +97,12 @@ async fn app_controller_impl(
                     Some(app_id::Id::Sandbox(_)) => {
                         Arc::new(SandboxApp::build(&matrix_hub_state, enabled_id.clone()))
                     }
+                    Some(app_id::Id::AppScript(_)) => {
+                        Arc::new(crate::apps::app_script::AppScript::build(
+                            &matrix_hub_state,
+                            enabled_id.clone(),
+                        ))
+                    }
                     _ => {
                         info!("Warning: unknown app ID, skipping");
                         continue;

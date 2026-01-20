@@ -4,8 +4,8 @@
 
 extern crate alloc;
 
-use embassy_net::tcp::TcpSocket;
-use embassy_time::Duration;
+use embassy_net::{Stack, tcp::TcpSocket};
+use embassy_time::{Duration, Timer};
 use log::info;
 use picoserve::{
     response::Content,
@@ -16,13 +16,12 @@ use crate::{
     app_rotation::{AppRotationDirection, AppRotationSignal},
     proto::app_state::MatrixHubState,
     state::SharedMatrixHubState,
-    wifi::SharedNetworkStack,
 };
 
 /// HTTP server task - serves configuration and status endpoints
 #[embassy_executor::task]
 pub async fn http_server_task(
-    stack: SharedNetworkStack,
+    stack: Stack<'static>,
     state: SharedMatrixHubState,
     app_rotation_signal: &'static AppRotationSignal,
 ) {
@@ -32,7 +31,7 @@ pub async fn http_server_task(
 }
 
 async fn http_server_task_impl(
-    stack: SharedNetworkStack,
+    stack: Stack<'static>,
     state: SharedMatrixHubState,
     app_rotation_signal: &'static AppRotationSignal,
 ) -> anyhow::Result<()> {
@@ -40,11 +39,9 @@ async fn http_server_task_impl(
 
     // Wait for network stack to get an IP address
     let ip = loop {
-        let stack = stack.lock().await;
         if let Some(config) = stack.config_v4() {
             break config.address.address();
         }
-        drop(stack);
         embassy_time::Timer::after(Duration::from_millis(100)).await;
     };
 
@@ -71,36 +68,10 @@ async fn http_server_task_impl(
     let mut tx_buffer = [0; 4096];
     let mut http_buffer = [0; 8192];
 
-    loop {
-        let mut socket = {
-            let stack = stack.lock().await;
-            TcpSocket::new(*stack, &mut rx_buffer, &mut tx_buffer)
-        };
-        socket.set_timeout(Some(Duration::from_secs(10)));
-
-        if let Err(e) = socket.accept(80).await {
-            log::warn!("HTTP server: Accept error: {:?}", e);
-            continue;
-        }
-
-        info!("HTTP server: Connection accepted");
-
-        match picoserve::Server::new(&app, &config, &mut http_buffer)
-            .serve(socket)
-            .await
-        {
-            Ok(picoserve::DisconnectionInfo {
-                handled_requests_count,
-                ..
-            }) => {
-                info!(
-                    "HTTP server: Connection closed, handled {} requests",
-                    handled_requests_count
-                );
-            }
-            Err(err) => log::warn!("HTTP server: Error: {:?}", err),
-        }
-    }
+    let _ = picoserve::Server::new(&app, &config, &mut http_buffer)
+        .listen_and_serve("http", stack, 80, &mut rx_buffer, &mut tx_buffer)
+        .await;
+    Ok(())
 }
 
 async fn index(

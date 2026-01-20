@@ -1,5 +1,4 @@
-//! App trait and app implementations.
-
+/// App trait and app implementations.
 extern crate alloc;
 
 use alloc::boxed::Box;
@@ -14,6 +13,7 @@ use crate::{
     wifi::SharedHttpTcpClient,
 };
 
+pub mod app_script;
 pub mod mta;
 pub mod plasma;
 pub mod sandbox;

@@ -132,7 +132,7 @@ async fn main(spawner: Spawner) {
         );
         (
             Arc::new(Mutex::new(HttpClient::new_with_tls(tcp, dns, tls))),
-            Arc::new(Mutex::new(*stack)),
+            *stack,
             runner,
         )
     };
@@ -155,7 +155,7 @@ async fn main(spawner: Spawner) {
 
     info!("init sntp task");
     spawner
-        .spawn(sntp_task(network_stack.clone(), http_client.clone()))
+        .spawn(sntp_task(network_stack, http_client.clone()))
         .expect("Failed to spawn sntp_task");
 
     info!("init app rotation signal");
@@ -164,7 +164,7 @@ async fn main(spawner: Spawner) {
     info!("init http server task");
     spawner
         .spawn(matrix_hub::tasks::http_server::http_server_task(
-            network_stack.clone(),
+            network_stack,
             matrix_hub_state.clone(),
             app_rotation_signal,
         ))

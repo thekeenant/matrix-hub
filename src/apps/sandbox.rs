@@ -9,14 +9,13 @@ use log::info;
 use micromath::F32Ext;
 
 use crate::{
-    apps::App,
+    apps::{App, RenderContext, RunContext},
     proto::app_state::{
         AppId, MatrixHubState, Particle,
         app_id::{Id, Sandbox},
     },
     state::SharedMatrixHubState,
     tasks::hub75::FrameBuffer,
-    wifi::SharedHttpTcpClient,
 };
 
 const WIDTH: i32 = 128;
@@ -44,7 +43,7 @@ impl App for SandboxApp {
         Self::new(state.clone())
     }
 
-    async fn run(&self, _http_client: SharedHttpTcpClient) -> anyhow::Result<()> {
+    async fn run(&self, _ctx: &RunContext) -> anyhow::Result<()> {
         {
             let mut state = self.state.lock().await;
             let sandbox = state.sandbox.get_or_insert_default();
@@ -102,7 +101,12 @@ impl App for SandboxApp {
         }
     }
 
-    fn render(&self, state: &mut MatrixHubState, display: &mut FrameBuffer) -> anyhow::Result<()> {
+    async fn render(&self, ctx: &RenderContext<'_>) -> anyhow::Result<()> {
+        let mut state_ref = ctx.state.borrow_mut();
+        let state: &mut MatrixHubState = &mut *state_ref;
+        let mut display_ref = ctx.display.borrow_mut();
+        let display: &mut FrameBuffer = &mut *display_ref;
+
         let sandbox = state.sandbox.get_or_insert_default();
 
         // Physics update - get accelerometer data from system_info
@@ -225,7 +229,7 @@ impl App for SandboxApp {
 }
 
 #[inline]
-fn check_collision(particles: &mut [crate::proto::app_state::Particle], i: usize, j: usize) {
+fn check_collision(particles: &mut [Particle], i: usize, j: usize) {
     let dx = particles[j].x - particles[i].x;
     let dy = particles[j].y - particles[i].y;
     let dist_sq = dx * dx + dy * dy;

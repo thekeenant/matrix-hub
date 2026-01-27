@@ -2,7 +2,7 @@ extern crate alloc;
 
 use alloc::sync::Arc;
 
-use embassy_net::{Stack, dns::DnsSocket, tcp::client::TcpClient};
+use embassy_net::{dns::DnsSocket, tcp::client::TcpClient};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use reqwless::client::HttpClient;
 

@@ -5,15 +5,19 @@
 extern crate alloc;
 
 use alloc::sync::Arc;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::{
+    cell::RefCell,
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use embassy_time::Duration;
 use esp_println as _;
 use log::{error, info, warn};
+use rhai::Engine;
 
 use crate::{
-    apps::App,
+    apps::{App, RenderContext},
     metrics::RateCounter,
     state::SharedMatrixHubState,
     tasks::{FrameBufferExchange, hub75::FrameBuffer},
@@ -31,6 +35,7 @@ pub async fn display_task(
     matrix_hub_state: SharedMatrixHubState,
     frames_per_second: Arc<AtomicU32>,
     ticks_per_second: AtomicU32,
+    engine: &'static Mutex<CriticalSectionRawMutex, &'static Engine>,
 ) {
     display_task_impl(
         rendered_buffer,
@@ -40,6 +45,7 @@ pub async fn display_task(
         matrix_hub_state,
         frames_per_second,
         ticks_per_second,
+        engine,
     )
     .await
     .expect("Display task failed");
@@ -53,8 +59,11 @@ async fn display_task_impl(
     matrix_hub_state: SharedMatrixHubState,
     frames_per_second: Arc<AtomicU32>,
     ticks_per_second: AtomicU32,
+    engine: &'static Mutex<CriticalSectionRawMutex, &'static Engine>,
 ) -> anyhow::Result<()> {
     info!("display_task: starting!");
+
+    let engine_ref = engine;
 
     let mut tps_counter = RateCounter::init(Duration::from_secs(1));
 
@@ -75,7 +84,12 @@ async fn display_task_impl(
 
             match current_app {
                 Some(app) => {
-                    if let Err(e) = app.render(&mut state, frame_buffer) {
+                    let render_ctx = RenderContext {
+                        state: RefCell::new(&mut *state),
+                        display: RefCell::new(&mut *frame_buffer),
+                        engine: engine_ref,
+                    };
+                    if let Err(e) = app.render(&render_ctx).await {
                         error!("Error rendering app '{:?}': {:?}", app.id(), e);
                     }
                 }

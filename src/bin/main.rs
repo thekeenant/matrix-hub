@@ -323,6 +323,15 @@ async fn main(spawner: Spawner) {
         clock: peripherals.GPIO2.degrade(),
         latch: peripherals.GPIO47.degrade(),
     };
+    let engine: &'static mut rhai::Engine = mk_static!(rhai::Engine, rhai::Engine::new_raw());
+    engine.register_fn("print", |s: &str| {
+        info!("[rhai] {}", s);
+    });
+    let engine_ref: &'static Mutex<CriticalSectionRawMutex, &'static rhai::Engine> = mk_static!(
+        Mutex<CriticalSectionRawMutex, &'static rhai::Engine>,
+        Mutex::new(engine)
+    );
+
     let cpu_ctrl = unsafe { esp_hal::peripherals::CPU_CTRL::<'static>::steal() };
     esp_rtos::start_second_core(
         cpu_ctrl,
@@ -337,6 +346,7 @@ async fn main(spawner: Spawner) {
 
             let matrix_hub_state = matrix_hub_state.clone();
             let hub75_target_hz = hub75_target_hz.clone();
+            let engine_ref = engine_ref;
             move || {
                 // High priority (+interrupt) Hub75 task for high FPS.
                 let high_prio_executor = mk_static!(
@@ -357,6 +367,7 @@ async fn main(spawner: Spawner) {
                     .expect("Failed to spawn hub75_task");
                 let low_prio_executor = mk_static!(Executor, Executor::new());
                 info!("init display task");
+
                 low_prio_executor.run(|spawner| {
                     spawner
                         .spawn(display_task(
@@ -367,6 +378,7 @@ async fn main(spawner: Spawner) {
                             matrix_hub_state.clone(),
                             render_metrics.frames_per_second.clone(),
                             render_metrics.ticks_per_second,
+                            engine_ref,
                         ))
                         .expect("Failed to spawn display_task");
 
@@ -388,6 +400,7 @@ async fn main(spawner: Spawner) {
             http_client.clone(),
             hub75_target_hz.clone(),
             app_rotation_signal,
+            engine_ref,
         ))
         .expect("Failed to spawn app_controller_task");
 

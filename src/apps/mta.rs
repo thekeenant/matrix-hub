@@ -27,14 +27,15 @@ use prost::Message as _;
 use reqwless::request::Method;
 
 use crate::{
-    apps::App,
+    apps::{App, RenderContext, RunContext},
     http::fetch,
     proto::{
         app_state::{
-            AppId, MatrixHubState, Platform as ProtoPlat, StationStatus, Train as ProtoTrain,
+            AppId, MatrixHubState, Platform as ProtoPlat, StationConfig, StationStatus,
+            Train as ProtoTrain,
             app_id::{Id, Mta},
         },
-        transit_realtime::FeedMessage,
+        transit_realtime::{FeedMessage, trip_update::StopTimeUpdate},
     },
     state::SharedMatrixHubState,
     tasks::hub75::{COLS, FrameBuffer},
@@ -550,7 +551,7 @@ impl App for MtaApp {
         }
     }
 
-    async fn run(&self, http_client: SharedHttpTcpClient) -> Result<()> {
+    async fn run(&self, ctx: &RunContext) -> Result<()> {
         loop {
             let station_configs = {
                 let app_state = self.state.lock().await;
@@ -562,7 +563,8 @@ impl App for MtaApp {
                     .unwrap_or_default()
             };
 
-            let combined_stations = self.fetch_all_stations(&http_client, station_configs).await;
+            let http_ref = ctx.http_client.borrow();
+            let combined_stations = self.fetch_all_stations(&*http_ref, station_configs).await;
             self.update_state(combined_stations).await;
 
             info!("MTA sleeping for {} seconds...", FETCH_INTERVAL.as_secs());
@@ -570,7 +572,12 @@ impl App for MtaApp {
         }
     }
 
-    fn render(&self, state: &mut MatrixHubState, display: &mut FrameBuffer) -> Result<()> {
+    async fn render(&self, ctx: &RenderContext<'_>) -> Result<()> {
+        let mut state_ref = ctx.state.borrow_mut();
+        let state: &mut MatrixHubState = &mut *state_ref;
+        let mut display_ref = ctx.display.borrow_mut();
+        let display: &mut FrameBuffer = &mut *display_ref;
+
         let has_data = state
             .mta
             .as_ref()
@@ -591,7 +598,7 @@ impl MtaApp {
     async fn fetch_all_stations(
         &self,
         http_client: &SharedHttpTcpClient,
-        station_configs: Vec<crate::proto::app_state::StationConfig>,
+        station_configs: Vec<StationConfig>,
     ) -> Vec<StationStatus> {
         let feed_stations = self.group_stations_by_feed(station_configs);
         let mut combined_stations = Vec::new();
@@ -610,8 +617,8 @@ impl MtaApp {
 
     fn group_stations_by_feed(
         &self,
-        station_configs: Vec<crate::proto::app_state::StationConfig>,
-    ) -> alloc::collections::BTreeMap<&str, Vec<crate::proto::app_state::StationConfig>> {
+        station_configs: Vec<StationConfig>,
+    ) -> alloc::collections::BTreeMap<&str, Vec<StationConfig>> {
         let mut feed_stations: alloc::collections::BTreeMap<&str, Vec<_>> =
             alloc::collections::BTreeMap::new();
 
@@ -630,7 +637,7 @@ impl MtaApp {
         &self,
         http_client: &SharedHttpTcpClient,
         feed_url: &str,
-        station_configs: Vec<crate::proto::app_state::StationConfig>,
+        station_configs: Vec<StationConfig>,
     ) -> Option<Vec<StationStatus>> {
         info!("Fetching MTA feed: {}", feed_url);
 
@@ -664,7 +671,7 @@ impl MtaApp {
     fn process_stations_from_feed(
         &self,
         feed: &FeedMessage,
-        station_configs: Vec<crate::proto::app_state::StationConfig>,
+        station_configs: Vec<StationConfig>,
     ) -> Vec<StationStatus> {
         station_configs
             .into_iter()
@@ -860,7 +867,7 @@ fn collect_arrivals(
 }
 
 fn process_stop_time_update(
-    stop_time_update: &crate::proto::transit_realtime::trip_update::StopTimeUpdate,
+    stop_time_update: &StopTimeUpdate,
     station_prefix: &str,
     last_stop_id: Option<&String>,
     trip_route: &str,

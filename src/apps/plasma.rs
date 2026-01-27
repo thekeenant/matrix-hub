@@ -2,6 +2,7 @@
 
 extern crate alloc;
 
+use alloc::boxed::Box;
 use core::fmt::Write;
 
 use embedded_graphics::{
@@ -16,7 +17,7 @@ use heapless::String as HString;
 use libm::sinf;
 
 use crate::{
-    apps::App,
+    apps::{App, RenderContext},
     proto::app_state::{
         AppId, MatrixHubState, PlasmaAppState,
         app_id::{Id, Plasma},
@@ -98,6 +99,7 @@ impl PlasmaApp {
     }
 }
 
+#[async_trait::async_trait(?Send)]
 impl App for PlasmaApp {
     fn build(_state: &SharedMatrixHubState, _: AppId) -> Self {
         Self::new()
@@ -109,7 +111,12 @@ impl App for PlasmaApp {
         }
     }
 
-    fn render(&self, state: &mut MatrixHubState, display: &mut FrameBuffer) -> anyhow::Result<()> {
+    async fn render(&self, ctx: &RenderContext<'_>) -> anyhow::Result<()> {
+        let mut state_ref = ctx.state.borrow_mut();
+        let state: &mut MatrixHubState = &mut *state_ref;
+        let mut display_ref = ctx.display.borrow_mut();
+        let display: &mut FrameBuffer = &mut *display_ref;
+
         // Initialize plasma state if needed
         if state.plasma.is_none() {
             state.plasma = Some(PlasmaAppState { phase: 0.0 });

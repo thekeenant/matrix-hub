@@ -13,10 +13,13 @@ use embassy_futures::select::{Either, select};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use embassy_time::{Duration, Timer};
 use log::info;
+use rhai::Engine;
 
 use crate::{
-    app_rotation::AppRotationSignal,
-    apps::{App, mta::MtaApp, plasma::PlasmaApp, sandbox::SandboxApp},
+    app_rotation::{AppRotationDirection, AppRotationSignal},
+    apps::{
+        App, RunContext, app_script::AppScript, mta::MtaApp, plasma::PlasmaApp, sandbox::SandboxApp,
+    },
     proto::app_state::{AppId, app_id},
     state::SharedMatrixHubState,
     tasks::hub75::Hub75Brightness,
@@ -31,6 +34,7 @@ pub async fn app_controller_task(
     http_client: SharedHttpTcpClient,
     hub75_brightness: Arc<Hub75Brightness>,
     rotation_signal: &'static AppRotationSignal,
+    engine: &'static Mutex<CriticalSectionRawMutex, &'static Engine>,
 ) {
     app_controller_impl(
         spawner,
@@ -39,6 +43,7 @@ pub async fn app_controller_task(
         http_client,
         hub75_brightness,
         rotation_signal,
+        engine,
     )
     .await
     .expect("App controller failed");
@@ -51,6 +56,7 @@ async fn app_controller_impl(
     http_client: SharedHttpTcpClient,
     _hub75_brightness: Arc<Hub75Brightness>,
     rotation_signal: &'static AppRotationSignal,
+    engine: &'static Mutex<CriticalSectionRawMutex, &'static Engine>,
 ) -> anyhow::Result<()> {
     info!("AppController: starting");
 
@@ -98,10 +104,7 @@ async fn app_controller_impl(
                         Arc::new(SandboxApp::build(&matrix_hub_state, enabled_id.clone()))
                     }
                     Some(app_id::Id::AppScript(_)) => {
-                        Arc::new(crate::apps::app_script::AppScript::build(
-                            &matrix_hub_state,
-                            enabled_id.clone(),
-                        ))
+                        Arc::new(AppScript::build(&matrix_hub_state, enabled_id.clone()))
                     }
                     _ => {
                         info!("Warning: unknown app ID, skipping");
@@ -115,7 +118,13 @@ async fn app_controller_impl(
                 info!("Built {} apps from config", apps_guard.len());
                 // Mount all built apps
                 for app in apps_guard.iter() {
-                    app.mount(spawner, http_client.clone()).await?;
+                    let run_ctx = RunContext {
+                        spawner,
+                        http_client: core::cell::RefCell::new(http_client.clone()),
+                        matrix_state: matrix_hub_state.clone(),
+                        engine,
+                    };
+                    app.mount(&run_ctx).await?;
                 }
                 // Set initial app
                 drop(state);
@@ -147,14 +156,20 @@ async fn app_controller_impl(
             (current_index, apps.len(), apps[current_index].clone())
         };
 
-        let app_future = current_app.run(http_client.clone());
+        let run_ctx = RunContext {
+            spawner,
+            http_client: core::cell::RefCell::new(http_client.clone()),
+            matrix_state: matrix_hub_state.clone(),
+            engine,
+        };
+        let app_future = current_app.run(&run_ctx);
         let rotation_future = rotation_signal.wait();
 
         let app_id = current_app.id();
         let direction = match select(app_future, rotation_future).await {
             Either::First(_) => {
                 info!("App {:?} completed its run() early", app_id);
-                crate::app_rotation::AppRotationDirection::Next
+                AppRotationDirection::Next
             }
             Either::Second(dir) => {
                 info!(

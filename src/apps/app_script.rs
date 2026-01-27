@@ -1,87 +1,132 @@
-use alloc::vec::Vec;
 extern crate alloc;
 use alloc::boxed::Box;
 
 use anyhow::Result;
-use embedded_graphics::{
-    pixelcolor::Rgb888,
-    prelude::*,
-    primitives::{Circle, PrimitiveStyle},
-};
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
+use embedded_graphics::{geometry::Point, pixelcolor::Rgb888, prelude::*};
 use log::warn;
 // use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
-use rhai::{Dynamic, Engine, Scope};
+use rhai::{AST, Dynamic, Engine, Scope};
 
 use crate::{
-    apps::App,
-    proto::app_state::{AppId, MatrixHubState, app_id::Id},
+    apps::{App, RenderContext, RunContext},
+    proto::app_state::{
+        AppId,
+        app_id::{AppScript as ProtoAppScript, Id},
+    },
     state::SharedMatrixHubState,
-    tasks::hub75::FrameBuffer,
-    wifi::SharedHttpTcpClient,
+    tasks::{RateLimiter, hub75::FrameBuffer},
 };
 
 pub struct AppScript {
     pub script: &'static str,
     pub state: SharedMatrixHubState,
+    pub scope: Mutex<CriticalSectionRawMutex, Scope<'static>>,
+    pub ast: Mutex<CriticalSectionRawMutex, Option<AST>>,
 }
 
 impl AppScript {
     pub fn new(state: SharedMatrixHubState, script: &'static str) -> Self {
-        Self { script, state }
+        Self {
+            script,
+            state,
+            scope: Mutex::new(Scope::new()),
+            ast: Mutex::new(None),
+        }
+    }
+
+    /// Compile and execute top-level script initialization. Caller must hold `scope` lock.
+    async fn compile_and_init(&self, engine: &rhai::Engine) -> Result<()> {
+        let mut ast = self.ast.lock().await;
+        // Compile to a temporary AST first
+        match engine.compile(self.script) {
+            Ok(compiled_ast) => {
+                *ast = Some(compiled_ast);
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!("Script compile error: {}", e));
+            }
+        }
+        Ok(())
     }
 }
 
 #[async_trait::async_trait(?Send)]
 impl App for AppScript {
     fn build(state: &SharedMatrixHubState, _: AppId) -> Self {
-        AppScript::new(state.clone(), RED_CIRCLE_SCRIPT)
+        AppScript::new(state.clone(), TRIPPY_SCRIPT)
     }
 
     fn id(&self) -> AppId {
         AppId {
-            id: Some(Id::AppScript(crate::proto::app_state::app_id::AppScript {})),
+            id: Some(Id::AppScript(ProtoAppScript {})),
         }
     }
 
-    async fn run(&self, _http_client: SharedHttpTcpClient) -> Result<()> {
-        // No-op for script app
-        core::future::pending::<()>().await;
-        Ok(())
-    }
+    async fn run(&self, ctx: &RunContext) -> Result<()> {
+        self.compile_and_init(*ctx.engine.lock().await).await?;
+        let ast = {
+            let ast_lock = self.ast.lock().await;
+            ast_lock
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Script AST not compiled"))?
+                .clone()
+        };
+        let mut rate_limiter = RateLimiter::new(20, "AppScript");
+        loop {
+            {
+                let engine = *ctx.engine.lock().await;
+                let mut scope = self.scope.lock().await;
 
-    fn render(&self, _state: &mut MatrixHubState, display: &mut FrameBuffer) -> Result<()> {
-        let engine = Engine::new_raw();
-        // Drawing command: (x, y, r, color)
-        // Only allow script to compute values, not emit drawing commands
-        let script = self.script;
-        let mut scope = Scope::new();
-        // Example: script returns [x, y, r, color] as an array
-        let result: Result<Vec<Dynamic>, _> = engine.eval_with_scope(&mut scope, script);
-        if let Ok(arr) = result {
-            if arr.len() == 4 {
-                let x = arr[0].clone().cast::<i64>();
-                let y = arr[1].clone().cast::<i64>();
-                let r = arr[2].clone().cast::<i64>();
-                let color = arr[3].clone().cast::<i64>();
-                let center = Point::new(x as i32, y as i32);
-                let radius = r as u32;
-                let rgb = Rgb888::new(
-                    ((color >> 16) & 0xFF) as u8,
-                    ((color >> 8) & 0xFF) as u8,
-                    (color & 0xFF) as u8,
-                );
-                let style = PrimitiveStyle::with_fill(rgb);
-                let _ = Circle::new(center, radius * 2)
-                    .into_styled(style)
-                    .draw(display);
-            } else {
-                warn!("Script did not return an array of 4 elements");
+                match engine.call_fn::<()>(&mut *scope, &ast, "update", ()) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        warn!("Script update() error: {}", e);
+                    }
+                }
             }
-        } else if let Err(ref _e) = result {
-            warn!("Script error: {:?}", _e);
+            rate_limiter.sleep().await;
         }
+    }
+
+    async fn render(&self, ctx: &RenderContext<'_>) -> Result<()> {
+        // Provide the real FrameBuffer pointer to the script API, call script's `render()` to draw pixels
+        let mut display_ref = ctx.display.borrow_mut();
+        let display: &mut FrameBuffer = &mut *display_ref;
+
+        let ast_lock = self.ast.lock().await;
+        let ast = match ast_lock.as_ref() {
+            Some(ast) => ast,
+            None => {
+                return Ok(());
+            }
+        };
+
+        let engine = *ctx.engine.lock().await;
+        let mut scope = self.scope.lock().await;
+        match engine.call_fn::<()>(&mut *scope, ast, "render", ()) {
+            Ok(_) => {}
+            Err(e) => {
+                warn!("Script render() error: {}", e);
+            }
+        }
+
         Ok(())
     }
 }
 
 pub const RED_CIRCLE_SCRIPT: &str = "[16, 16, 10, 0xFF0000]";
+
+pub const TRIPPY_SCRIPT: &str = r#"
+// Trippy animated pattern for 128x32
+let t = 0;
+
+fn update() {
+    // Increment animation frame counter
+    t = t + 1;
+}
+
+fn render() {
+    print("hey from rhai!");
+}
+"#;

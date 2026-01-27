@@ -10,7 +10,10 @@ use embassy_net::{
 use embassy_time::{Duration, Instant, Timer};
 use log::{info, warn};
 
-use crate::{time::current_time_blocking, wifi::SharedHttpTcpClient};
+use crate::{
+    time::{current_time_blocking, set_boot_time},
+    wifi::SharedHttpTcpClient,
+};
 
 const NTP_SERVER: &str = "pool.ntp.org";
 const NTP_PORT: u16 = 123;
@@ -115,6 +118,6 @@ async fn sync_time(http_client: SharedHttpTcpClient, stack: Stack<'static>) -> a
     let now_us = Instant::now().as_micros();
     let unix_us = unix_timestamp * 1_000_000;
 
-    crate::time::set_boot_time(unix_us, now_us);
+    set_boot_time(unix_us, now_us);
     Ok(())
 }

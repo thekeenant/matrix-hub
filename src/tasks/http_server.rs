@@ -4,8 +4,8 @@
 
 extern crate alloc;
 
-use embassy_net::{Stack, tcp::TcpSocket};
-use embassy_time::{Duration, Timer};
+use embassy_net::Stack;
+use embassy_time::Duration;
 use log::info;
 use picoserve::{
     response::Content,

@@ -16,6 +16,7 @@ use crate::{
 };
 
 pub mod app_script;
+pub mod framebuffer_api;
 pub mod mta;
 pub mod plasma;
 pub mod sandbox;

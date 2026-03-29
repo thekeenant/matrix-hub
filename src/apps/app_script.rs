@@ -54,7 +54,8 @@ impl AppScript {
 #[async_trait::async_trait(?Send)]
 impl App for AppScript {
     fn build(state: &SharedMatrixHubState, _: AppId) -> Self {
-        AppScript::new(state.clone(), TRIPPY_SCRIPT)
+        // Use a test script by default that exercises the fast framebuffer API.
+        AppScript::new(state.clone(), TEST_SCRIPT)
     }
 
     fn id(&self) -> AppId {
@@ -94,10 +95,14 @@ impl App for AppScript {
         let mut display_ref = ctx.display.borrow_mut();
         let display: &mut FrameBuffer = &mut *display_ref;
 
+        // Expose this framebuffer pointer for direct fast access from Rhai.
+        crate::apps::framebuffer_api::set_current_framebuffer(display as *mut _ as usize);
+
         let ast_lock = self.ast.lock().await;
         let ast = match ast_lock.as_ref() {
             Some(ast) => ast,
             None => {
+                crate::apps::framebuffer_api::clear_current_framebuffer();
                 return Ok(());
             }
         };
@@ -111,14 +116,16 @@ impl App for AppScript {
             }
         }
 
+        // Always clear the global pointer after the script finishes.
+        crate::apps::framebuffer_api::clear_current_framebuffer();
+
         Ok(())
     }
 }
 
 pub const RED_CIRCLE_SCRIPT: &str = "[16, 16, 10, 0xFF0000]";
 
-pub const TRIPPY_SCRIPT: &str = r#"
-// Trippy animated pattern for 128x32
+pub const TRIPPY_SCRIPT: &str = r#"// Trippy animated pattern for 128x32
 let t = 0;
 
 fn update() {
@@ -128,5 +135,26 @@ fn update() {
 
 fn render() {
     print("hey from rhai!");
+}
+"#;
+
+/// Simple test script that draws a horizontal line using `set_pixel`.
+pub const TEST_SCRIPT: &str = r#"
+fn update() {
+    // no-op
+}
+
+fn render() {
+    // Clear to black
+    clear(0x000000);
+
+    let w = fb_width();
+    let h = fb_height();
+    let c = 0xFF0000; // red
+
+    let x = 0;
+    while x < w {
+        set_pixel(x, x % h, c);
+    }
 }
 "#;

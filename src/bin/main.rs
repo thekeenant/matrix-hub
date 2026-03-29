@@ -327,6 +327,16 @@ async fn main(spawner: Spawner) {
     engine.register_fn("print", |s: &str| {
         info!("[rhai] {}", s);
     });
+
+    // Register framebuffer functions for fast direct access from scripts
+    engine.register_fn("set_pixel", |x: i64, y: i64, color: i64| {
+        matrix_hub::apps::framebuffer_api::set_pixel(x, y, color);
+    });
+    engine.register_fn("clear", |color: i64| {
+        matrix_hub::apps::framebuffer_api::clear(color);
+    });
+    engine.register_fn("fb_width", || matrix_hub::apps::framebuffer_api::width());
+    engine.register_fn("fb_height", || matrix_hub::apps::framebuffer_api::height());
     let engine_ref: &'static Mutex<CriticalSectionRawMutex, &'static rhai::Engine> = mk_static!(
         Mutex<CriticalSectionRawMutex, &'static rhai::Engine>,
         Mutex::new(engine)

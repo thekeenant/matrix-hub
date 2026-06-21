@@ -28,6 +28,8 @@ jobs:
           ldproxy: true
       - name: Enable caching
         uses: Swatinem/rust-cache@v2
+      - name: Setup test .env
+        run: cp .env.example .env
       - name: Check Formatting
         run: cargo fmt --all -- --check --color always
       - name: Run Clippy

@@ -72,10 +72,23 @@ pub fn connect_wifi(
     };
 
     let ap_config = AccessPointConfiguration {
-        ssid: "Matrix-Hub"
+        ssid: crate::config::AP_SSID
             .try_into()
             .map_err(|_| anyhow!("Invalid Matrix-Hub AP SSID length"))?,
-        auth_method: AuthMethod::None,
+        password: crate::config::AP_PASS
+            .try_into()
+            .map_err(|_| anyhow!("Invalid Matrix-Hub AP Pass length"))?,
+        auth_method: {
+            #[allow(
+                clippy::const_is_empty,
+                reason = "AP_PASS is a compile-time constant"
+            )]
+            if crate::config::AP_PASS.is_empty() {
+                AuthMethod::None
+            } else {
+                AuthMethod::WPA2Personal
+            }
+        },
         ..Default::default()
     };
 

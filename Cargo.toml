@@ -1,131 +1,52 @@
 [package]
 name = "matrix-hub"
 version = "0.1.0"
-edition = "2024"
-rust-version = "1.88"
+authors = ["Keenan Thompson <github@keenant.com>"]
+edition = "2021"
+resolver = "2"
+rust-version = "1.82"
 
 [[bin]]
 name = "matrix-hub"
-path = "./src/bin/main.rs"
-
-[dependencies]
-allocator-api2 = { version = "0.3", default-features = false, features = [
-  "alloc",
-] }
-anyhow = { version = "1.0", default-features = false }
-async-trait = "0.1"
-atomic_float = "1.1"
-chrono = { version = "0.4", default-features = false, features = ["alloc"] }
-critical-section = "1.2"
-embassy-executor = "0.9"
-embassy-futures = "0.1"
-embassy-net = { version = "0.7", default-features = false, features = [
-  "dhcpv4",
-  "dns",
-  "proto-ipv4",
-  "tcp",
-  "udp",
-] }
-embassy-sync = "0.7"
-embassy-time = "0.5"
-embedded-graphics = "0.8"
-embedded-io = "0.7"
-embedded-io-async = "0.7"
-embedded-nal-async = "0.9"
-xtensa-lx = "0.9.0"
-esp-alloc = "0.9"
-esp-backtrace = { version = "0.18", features = [
-  "esp32s3",
-  "panic-handler",
-  "println",
-] }
-esp-storage = { version = "0.8", features = ["esp32s3"] }
-embedded-storage = "0.3"
-esp-bootloader-esp-idf = { version = "0.4", features = ["esp32s3"] }
-esp-hal = { version = "1.0", features = ["esp32s3", "psram", "unstable"] }
-esp-hub75 = { version = "0.8", features = ["esp32s3", "iram"] }
-lis3dh-async = "0.9"
-esp-println = { version = "0.16", default-features = false, features = [
-  "critical-section",
-  "esp32s3",
-  "log-04",
-  "uart",
-] }
-esp-radio = { version = "0.17", features = [
-  "esp-alloc",
-  "esp32s3",
-  "smoltcp",
-  "unstable",
-  "wifi",
-] }
-esp-rtos = { version = "0.2", features = [
-  "embassy",
-  "esp-alloc",
-  "esp-radio",
-  "esp32s3",
-] }
-heapless = "0.9"
-libm = "0.2"
-log = "0.4"
-micromath = "2.1"
-picoserve = { version = "0.17", default-features = false, features = [
-  "embassy",
-  "json",
-  "alloc",
-] }
-prost = { version = "0.14.3", default-features = false, features = ["derive"] }
-portable-atomic = { version = "1.10", features = ["critical-section"] }
-reqwless = { version = "0.13", default-features = false, features = [
-  "embedded-tls",
-] }
-serde = { version = "1.0", default-features = false, features = [
-  "derive",
-  "alloc",
-] }
-serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
-smoltcp = { version = "0.12", default-features = false, features = [
-  "medium-ethernet",
-  "multicast",
-  "proto-dhcpv4",
-  "proto-dns",
-  "proto-ipv4",
-  "socket-dns",
-  "socket-icmp",
-  "socket-raw",
-  "socket-tcp",
-  "socket-udp",
-] }
-static_cell = "2.1"
-
-[build-dependencies]
-dotenvy = "0.15"
-prost-build = "0.14.3"
-protoc-prebuilt = "0.3"
-
-[lints.rust]
-dead_code = "warn"
-unsafe_code = "warn"
-unused_imports = "warn"
-
-[lints.clippy]
-all = { level = "warn", priority = -1 }
-enum_glob_use = "warn"
-nursery = { level = "warn", priority = -1 }
-pedantic = { level = "warn", priority = -1 }
-unused_async = "warn"
-unwrap_used = "warn"
-
-[profile.dev]
-# For debug builds always builds with some optimization
-opt-level = "s"
+harness = false # do not use the built-in cargo test harness -> resolve rust-analyzer errors
 
 [profile.release]
-codegen-units = 1        # LLVM can perform better optimizations using a single thread
-debug = false            # Disable debug info for smaller binary
-debug-assertions = false
-incremental = false
-lto = 'fat'              # Link-time optimization
-opt-level = 'z'          # Optimize for size
-overflow-checks = false
-strip = true             # Strip symbols from binary
-panic = 'abort'          # Reduce panic overhead
+opt-level = "s"
+
+[profile.dev]
+debug = true    # Symbols are nice, and they don't increase the size on Flash
+opt-level = "z"
+
+
+[dependencies]
+log = "0.4"
+esp-idf-svc = { version = "0.52.1", features = ["critical-section", "embassy-time-driver", "embassy-sync"] }
+# Remove `generic-queue-8` if you plan to use `embassy-time` WITH `embassy-executor`
+embassy-time = { version = "0.5", features = ["generic-queue-8"] }
+embedded-graphics = "0.8.1"
+rand = "0.8.5"
+embedded-svc = "0.29"
+anyhow = "1.0"
+dotenvy_macro = "0.15.7"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
+buffa = { version = "0.7", default-features = false }
+
+[build-dependencies]
+embuild = "0.33"
+bindgen = "0.69"
+buffa-build = "0.7"
+protoc-prebuilt = "0.3"
+
+[package.metadata.esp-idf-sys]
+extra_components = [{ component_dirs = ["components/hub75_wrapper"], bindings_header = "components/hub75_wrapper/bindings.h", bindings_module = "hub75" }]
+
+[lints.rust]
+unsafe_code = "warn"
+
+[lints.clippy]
+allow_attributes_without_reason = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+
+

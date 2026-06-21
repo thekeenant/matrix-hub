@@ -1,95 +1,106 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Load .env file if it exists and load them for the Rust compiler.
-    let _ = dotenvy::dotenv();
-    if let Ok(ssid) = std::env::var("WIFI_SSID") {
-        println!("cargo:rustc-env=WIFI_SSID={}", ssid);
-    }
-    if let Ok(password) = std::env::var("WIFI_PASSWORD") {
-        println!("cargo:rustc-env=WIFI_PASSWORD={}", password);
-    }
-
-    linker_be_nice()?;
-    println!("cargo:rustc-link-arg=-Tlinkall.x");
+    embuild::espidf::sysenv::output();
 
     let (protoc_bin, _) = protoc_prebuilt::init("22.0")
-        .map_err(|e| format!("Failed to initialize protoc prebuilt: {}", e))?;
-    let mut config = prost_build::Config::new();
-    config.btree_map(&["."]);
-    config.protoc_executable(protoc_bin);
-    config.type_attribute(".", "#[derive(serde::Serialize,serde::Deserialize)]");
-    config.compile_protos(
-        &[
-            "proto/com/google/transit/realtime/gtfs-realtime.proto",
-            "proto/com/google/transit/realtime/gtfs-realtime-NYCT.proto",
-            "proto/com/google/transit/realtime/gtfs-realtime-time-range.proto",
-            "proto/state.proto",
-        ],
-        &["proto/"],
-    )?;
-    Ok(())
-}
-
-fn linker_be_nice() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() > 1 {
-        let kind = &args[1];
-        let what = &args[2];
-
-        match kind.as_str() {
-            "undefined-symbol" => match what.as_str() {
-                what if what.starts_with("_defmt_") => {
-                    eprintln!();
-                    eprintln!(
-                        "💡 `defmt` not found - make sure `defmt.x` is added as a linker script and you have included `use defmt_rtt as _;`"
-                    );
-                    eprintln!();
-                }
-                "_stack_start" => {
-                    eprintln!();
-                    eprintln!("💡 Is the linker script `linkall.x` missing?");
-                    eprintln!();
-                }
-                what if what.starts_with("esp_rtos_") => {
-                    eprintln!();
-                    eprintln!(
-                        "💡 `esp-radio` has no scheduler enabled. Make sure you have initialized `esp-rtos` or provided an external scheduler."
-                    );
-                    eprintln!();
-                }
-                "embedded_test_linker_file_not_added_to_rustflags" => {
-                    eprintln!();
-                    eprintln!(
-                        "💡 `embedded-test` not found - make sure `embedded-test.x` is added as a linker script for tests"
-                    );
-                    eprintln!();
-                }
-                "free"
-                | "malloc"
-                | "calloc"
-                | "get_free_internal_heap_size"
-                | "malloc_internal"
-                | "realloc_internal"
-                | "calloc_internal"
-                | "free_internal" => {
-                    eprintln!();
-                    eprintln!(
-                        "💡 Did you forget the `esp-alloc` dependency or didn't enable the `compat` feature on it?"
-                    );
-                    eprintln!();
-                }
-                _ => (),
-            },
-            _ => {
-                std::process::exit(1);
-            }
-        }
-
-        std::process::exit(0);
+        .map_err(|e| format!("Failed to initialize protoc prebuilt: {e}"))?;
+    #[allow(
+        unsafe_code,
+        reason = "Required to set PROTOC environment variable for protoc_prebuilt"
+    )]
+    unsafe {
+        std::env::set_var("PROTOC", protoc_bin);
     }
 
-    println!(
-        "cargo:rustc-link-arg=-Wl,--error-handling-script={}",
-        std::env::current_exe()?.display()
-    );
+    fn find_protos(dir: &std::path::Path) -> std::io::Result<Vec<std::path::PathBuf>> {
+        let mut files = Vec::new();
+        if dir.is_dir() {
+            for entry in std::fs::read_dir(dir)? {
+                let path = entry?.path();
+                if path.is_dir() {
+                    files.extend(find_protos(&path)?);
+                } else if path.extension().is_some_and(|ext| ext == "proto") {
+                    files.push(path);
+                }
+            }
+        }
+        Ok(files)
+    }
+
+    buffa_build::Config::new()
+        .generate_json(false) // No need for JSON generation since we fetch protobufs directly
+        .files(&find_protos(std::path::Path::new("proto"))?)
+        .includes(&["proto/"])
+        .compile()
+        .map_err(|e| format!("Failed to compile protobufs: {e:?}"))?;
+
+    // Generate stops mapping
+    let out_dir = std::env::var("OUT_DIR")?;
+    let dest_path = std::path::Path::new(&out_dir).join("stops.rs");
+    let mut out = String::new();
+    out.push_str("pub fn get_stop_name(stop_id: &str) -> Option<&'static str> {\n");
+    out.push_str("    match stop_id {\n");
+
+    let stops_txt_path = "assets/stops.txt";
+    if std::path::Path::new(stops_txt_path).exists() {
+        println!("cargo:rerun-if-changed={stops_txt_path}");
+        let contents = std::fs::read_to_string(stops_txt_path)?;
+        let mut is_first = true;
+
+        for line in contents.lines() {
+            if is_first {
+                is_first = false;
+                continue;
+            }
+
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() >= 3 {
+                let stop_id = parts[0];
+                let mut stop_name = parts[1].to_string();
+
+                // Common abbreviations and removals of long co-names
+                stop_name = stop_name.replace("Center", "Ctr");
+                stop_name = stop_name.replace("Avenue", "Av");
+                stop_name = stop_name.replace("Parkway", "Pkwy");
+                stop_name = stop_name.replace("Boulevard", "Blvd");
+                stop_name = stop_name.replace("Street", "St");
+                stop_name = stop_name.replace("Square", "Sq");
+                stop_name = stop_name.replace("Heights", "Hts");
+
+                // Remove long, unnecessary secondary names that take up matrix space
+                stop_name = stop_name.replace("-Parsons/Archer", "");
+                stop_name = stop_name.replace("-Washington Hts", "");
+                stop_name = stop_name.replace("-Lehman College", "");
+                stop_name = stop_name.replace("-Brooklyn College", "");
+                stop_name = stop_name.replace("-Medgar Evers College", "");
+                stop_name = stop_name.replace("-City College", "");
+                stop_name = stop_name.replace("-Columbia University", "");
+                stop_name = stop_name.replace("-Lincoln Center", "");
+                stop_name = stop_name.replace("-Museum of Natural History", "");
+                stop_name = stop_name.replace("-Barclays Ctr", "");
+                stop_name = stop_name.replace("-Stonewall", "");
+                stop_name = stop_name.replace("-Little Haiti", "");
+
+                // Exclude directional stop IDs (e.g., 701N)
+                if !stop_id.ends_with('N') && !stop_id.ends_with('S') {
+                    out.push_str(&format!(
+                        "        \"{}\" => Some(\"{}\"),\n",
+                        stop_id,
+                        stop_name.replace('"', "\\\"")
+                    ));
+                }
+            }
+        }
+    } else {
+        println!(
+            "cargo:warning=assets/stops.txt not found! Destination names won't be mapped properly."
+        );
+    }
+
+    out.push_str("        _ => None,\n");
+    out.push_str("    }\n");
+    out.push_str("}\n");
+
+    std::fs::write(&dest_path, out)?;
+
     Ok(())
 }

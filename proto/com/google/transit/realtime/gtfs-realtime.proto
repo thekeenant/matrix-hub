@@ -111,13 +111,11 @@ message FeedEntity {
   // Data about the entity itself. Exactly one of the following fields must be
   // present (unless the entity is being deleted).
   optional TripUpdate trip_update = 3;
-  optional VehiclePosition vehicle = 4;
-  optional Alert alert = 5;
-
-  // NOTE: This field is still experimental, and subject to change. It may be formally adopted in the future.
-  optional Shape shape = 6;
-  optional Stop stop = 7;
-  optional TripModifications trip_modifications = 8;
+  // optional VehiclePosition vehicle = 4;
+  // optional Alert alert = 5;
+  // optional Shape shape = 6;
+  // optional Stop stop = 7;
+  // optional TripModifications trip_modifications = 8;
 
   // The extensions namespace allows 3rd-party developers to extend the
   // GTFS Realtime Specification in order to add and evaluate new features and
@@ -165,8 +163,7 @@ message TripUpdate {
   // It does *not* mean that the trip is progressing according to schedule.
   required TripDescriptor trip = 1;
 
-  // Additional information on the vehicle that is serving this trip.
-  optional VehicleDescriptor vehicle = 3;
+  // optional VehicleDescriptor vehicle = 3;
 
   // Timing information for a single predicted event (either arrival or
   // departure).
@@ -230,13 +227,8 @@ message TripUpdate {
     optional string stop_id = 4;
 
     optional StopTimeEvent arrival = 2;
-    optional StopTimeEvent departure = 3;
-
-    // Expected occupancy after departure from the given stop.
-    // Should be provided only for future stops.
-    // In order to provide departure_occupancy_status without either arrival or
-    // departure StopTimeEvents, ScheduleRelationship should be set to NO_DATA. 
-    optional VehiclePosition.OccupancyStatus departure_occupancy_status = 7;
+    // optional StopTimeEvent departure = 3;
+    // optional VehiclePosition.OccupancyStatus departure_occupancy_status = 7;
 
     // The relation between the StopTimeEvents and the static schedule.
     enum ScheduleRelationship {
@@ -332,7 +324,7 @@ message TripUpdate {
     // GTFS Realtime Specification in order to add and evaluate new features
     // and modifications to the spec.
     // extensions 1000 to 1999;
-    optional NyctStopTimeUpdate nyct_stop_time_update = 1001;
+    // optional NyctStopTimeUpdate nyct_stop_time_update = 1001;
 
     // The following extension IDs are reserved for private use by any organization.
     extensions 9000 to 9999;
@@ -438,7 +430,7 @@ message TripUpdate {
     // The following extension IDs are reserved for private use by any organization.
     extensions 9000 to 9999;
   }
-  optional TripProperties trip_properties = 6;
+  // optional TripProperties trip_properties = 6;
 
   // The extensions namespace allows 3rd-party developers to extend the
   // GTFS Realtime Specification in order to add and evaluate new features and

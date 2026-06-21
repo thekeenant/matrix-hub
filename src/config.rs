@@ -18,7 +18,5 @@ pub const PIN_OE: i32 = 14;
 pub const PIN_CLK: i32 = 2;
 
 // WiFi Credentials (Loaded at compile-time from .env)
-pub const WIFI_SSID: &str = dotenvy_macro::dotenv!("WIFI_SSID");
-pub const WIFI_PASS: &str = dotenvy_macro::dotenv!("WIFI_PASS");
 pub const AP_SSID: &str = dotenvy_macro::dotenv!("AP_SSID");
 pub const AP_PASS: &str = dotenvy_macro::dotenv!("AP_PASS");

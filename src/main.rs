@@ -16,6 +16,7 @@ mod fonts;
 mod input;
 mod network;
 pub mod proto;
+pub mod storage;
 mod task;
 
 use apps::manager::AppManager;
@@ -47,6 +48,8 @@ fn main() -> Result<()> {
     let nvs = EspDefaultNvsPartition::take()
         .map_err(|_| anyhow::anyhow!("Failed to take nvs"))?;
 
+    crate::storage::init_config(nvs.clone());
+
     let btn_driver = PinDriver::input(peripherals.pins.gpio6, Pull::Up)?;
     let mut btn_up = Button::new(btn_driver);
 
@@ -57,16 +60,6 @@ fn main() -> Result<()> {
 
     // We use a channel to block the main thread until the display is fully initialized
     let (display_ready_tx, display_ready_rx) = mpsc::sync_channel::<()>(1);
-
-    // Load brightness from NVS if available
-    if let Ok(nvs_storage) =
-        esp_idf_svc::nvs::EspNvs::new(nvs.clone(), "matrix_config", true)
-    {
-        if let Ok(Some(b)) = nvs_storage.get_u8("brightness") {
-            crate::display::GLOBAL_BRIGHTNESS
-                .store(b, std::sync::atomic::Ordering::Relaxed);
-        }
-    }
 
     // =========================================================================
     // Core 1: The Display Actor
@@ -116,13 +109,17 @@ fn main() -> Result<()> {
         // Signal the main thread that DMA memory is safely allocated!
         let _ = display_ready_tx.send(());
 
-        let mut current_brightness = crate::display::GLOBAL_BRIGHTNESS
-            .load(std::sync::atomic::Ordering::Relaxed);
+        let mut current_brightness = crate::storage::global_config()
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .brightness as u8;
         display.set_brightness(current_brightness);
 
         while let Ok(framebuffer) = rx.recv() {
-            let new_brightness = crate::display::GLOBAL_BRIGHTNESS
-                .load(std::sync::atomic::Ordering::Relaxed);
+            let new_brightness = crate::storage::global_config()
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .brightness as u8;
             if new_brightness != current_brightness {
                 current_brightness = new_brightness;
                 display.set_brightness(current_brightness);
@@ -168,7 +165,7 @@ fn main() -> Result<()> {
     let mut wifi = EspWifi::new(peripherals.modem, sysloop, Some(nvs.clone()))
         .map_err(|e| anyhow::anyhow!("Failed to create EspWifi: {:?}", e))?;
 
-    network::wifi::connect_wifi(&mut wifi, &nvs)
+    network::wifi::connect_wifi(&mut wifi)
         .context("Failed to connect to WiFi")?;
 
     let (wifi_tx, wifi_rx) = std::sync::mpsc::channel();
@@ -176,7 +173,7 @@ fn main() -> Result<()> {
     // Start Captive Portal DNS Server
     network::dns::start_dns_server();
 
-    let _http_server = network::server::start_server(nvs.clone(), wifi_tx)
+    let _http_server = network::server::start_server(wifi_tx)
         .context("Failed to start HTTP server")?;
 
     // =========================================================================
@@ -216,7 +213,7 @@ fn main() -> Result<()> {
             // Check for new credentials from HTTP server
             if let Ok((_new_ssid, _new_pass)) = wifi_rx.try_recv() {
                 log::info!("Received new credentials! Reconnecting...");
-                let _ = network::wifi::connect_wifi(&mut wifi, &nvs);
+                let _ = network::wifi::connect_wifi(&mut wifi);
                 is_connected = false;
                 ip_str = None;
             }

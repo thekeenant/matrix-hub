@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+// Represents WiFi connection credentials
+message WifiCredentials {
+    // The SSID of the WiFi network to connect to
+    string ssid = 1;
+    // The password of the WiFi network to connect to
+    string pass = 2;
+}
+
+// Stores all persistent device configuration loaded at startup
+message DeviceConfig {
+    // Optional WiFi credentials. If absent, fallback to defaults.
+    WifiCredentials wifi = 1;
+    // Global LED brightness level (0-255)
+    uint32 brightness = 2;
+}

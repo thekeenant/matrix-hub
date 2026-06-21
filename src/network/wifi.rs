@@ -1,58 +1,18 @@
 use anyhow::{anyhow, Result};
-use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs};
+
 use esp_idf_svc::wifi::{
     AccessPointConfiguration, AuthMethod, ClientConfiguration, Configuration,
     EspWifi,
 };
 use log::info;
 
-pub fn get_credentials(
-    nvs_partition: &EspDefaultNvsPartition,
-) -> (String, String) {
-    let Ok(nvs) = EspNvs::new(nvs_partition.clone(), "wifi_creds", true) else {
-        return (
-            crate::config::WIFI_SSID.to_string(),
-            crate::config::WIFI_PASS.to_string(),
-        );
+pub fn connect_wifi(wifi: &mut EspWifi<'static>) -> Result<()> {
+    let (ssid, pass) = {
+        let guard = crate::storage::global_config()
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        (guard.wifi.ssid.clone(), guard.wifi.pass.clone())
     };
-
-    let mut ssid_buf = [0u8; 64];
-    let mut pass_buf = [0u8; 64];
-
-    let ssid = if let Ok(Some(s)) = nvs.get_str("ssid", &mut ssid_buf) {
-        s.to_string()
-    } else {
-        crate::config::WIFI_SSID.to_string()
-    };
-
-    let pass = if let Ok(Some(p)) = nvs.get_str("pass", &mut pass_buf) {
-        p.to_string()
-    } else {
-        crate::config::WIFI_PASS.to_string()
-    };
-
-    (ssid, pass)
-}
-
-pub fn save_credentials(
-    nvs_partition: EspDefaultNvsPartition,
-    ssid: &str,
-    pass: &str,
-) -> Result<()> {
-    let nvs = EspNvs::new(nvs_partition, "wifi_creds", true)
-        .map_err(|e| anyhow!("Failed to open NVS: {:?}", e))?;
-    nvs.set_str("ssid", ssid)
-        .map_err(|e| anyhow!("Failed to save ssid: {:?}", e))?;
-    nvs.set_str("pass", pass)
-        .map_err(|e| anyhow!("Failed to save pass: {:?}", e))?;
-    Ok(())
-}
-
-pub fn connect_wifi(
-    wifi: &mut EspWifi<'static>,
-    nvs_partition: &EspDefaultNvsPartition,
-) -> Result<()> {
-    let (ssid, pass) = get_credentials(nvs_partition);
 
     let client_config = ClientConfiguration {
         ssid: ssid

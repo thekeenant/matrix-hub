@@ -2,7 +2,7 @@ use anyhow::Result;
 use esp_idf_svc::http::server::{Configuration, EspHttpServer};
 use esp_idf_svc::http::Method;
 use esp_idf_svc::io::Write;
-use esp_idf_svc::nvs::EspDefaultNvsPartition;
+
 use log::info;
 
 fn url_decode(encoded: &str) -> String {
@@ -26,7 +26,6 @@ fn url_decode(encoded: &str) -> String {
 }
 
 pub fn start_server(
-    nvs_partition: EspDefaultNvsPartition,
     credentials_tx: std::sync::mpsc::Sender<(String, String)>,
 ) -> Result<EspHttpServer<'static>> {
     let config = Configuration {
@@ -84,8 +83,6 @@ pub fn start_server(
         Ok::<(), anyhow::Error>(())
     })?;
 
-    let nvs_clone = nvs_partition.clone();
-
     server.fn_handler("/save", Method::Post, move |mut request| {
         let mut buf = vec![0; 512];
         let bytes_read = request.read(&mut buf).unwrap_or(0);
@@ -108,11 +105,15 @@ pub fn start_server(
         let ssid = url_decode(ssid);
         let pass = url_decode(pass);
 
-        if let Err(e) = crate::network::wifi::save_credentials(
-            nvs_clone.clone(),
-            &ssid,
-            &pass,
-        ) {
+        if let Err(e) = crate::storage::update_config(|config| {
+            config.wifi = buffa::MessageField::some(
+                crate::proto::config::WifiCredentials {
+                    ssid: ssid.clone(),
+                    pass: pass.clone(),
+                    __buffa_unknown_fields: Default::default(),
+                },
+            );
+        }) {
             let error_html = format!("Failed to save: {:?}", e);
             request
                 .into_status_response(500)?
@@ -134,7 +135,6 @@ pub fn start_server(
         Ok::<(), anyhow::Error>(())
     })?;
 
-    let nvs_clone_2 = nvs_partition.clone();
     server.fn_handler("/settings", Method::Post, move |mut request| {
         let mut body = String::new();
         let mut buf = [0u8; 128];
@@ -144,21 +144,17 @@ pub fn start_server(
 
         for pair in body.split('&') {
             let mut kv = pair.split('=');
-            if let (Some(k), Some(v)) = (kv.next(), kv.next()) {
-                if k == "brightness" {
-                    if let Ok(b) = v.parse::<u8>() {
-                        crate::display::GLOBAL_BRIGHTNESS
-                            .store(b, std::sync::atomic::Ordering::Relaxed);
-                        if let Ok(store) = esp_idf_svc::nvs::EspNvs::new(
-                            nvs_clone_2.clone(),
-                            "matrix_config",
-                            true,
-                        ) {
-                            let _ = store.set_u8("brightness", b);
-                        }
-                    }
-                }
-            }
+            let (Some(k), Some(v)) = (kv.next(), kv.next()) else {
+                continue;
+            };
+            if k != "brightness" {
+                continue;
+            };
+            let Ok(b) = v.parse::<u8>() else { continue };
+
+            let _ = crate::storage::update_config(|config| {
+                config.brightness = b as u32;
+            });
         }
 
         // PRG Pattern: Redirect back to root

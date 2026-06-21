@@ -11,7 +11,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::set_var("PROTOC", protoc_bin);
     }
 
-    fn find_protos(dir: &std::path::Path) -> std::io::Result<Vec<std::path::PathBuf>> {
+    fn find_protos(
+        dir: &std::path::Path,
+    ) -> std::io::Result<Vec<std::path::PathBuf>> {
         let mut files = Vec::new();
         if dir.is_dir() {
             for entry in std::fs::read_dir(dir)? {
@@ -37,7 +39,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = std::env::var("OUT_DIR")?;
     let dest_path = std::path::Path::new(&out_dir).join("stops.rs");
     let mut out = String::new();
-    out.push_str("pub fn get_stop_name(stop_id: &str) -> Option<&'static str> {\n");
+    out.push_str(
+        "pub fn get_stop_name(stop_id: &str) -> Option<&'static str> {\n",
+    );
     out.push_str("    match stop_id {\n");
 
     let stops_txt_path = "assets/stops.txt";

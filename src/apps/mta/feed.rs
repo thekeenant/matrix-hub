@@ -15,7 +15,11 @@ struct RawArrival {
 }
 
 /// Process a single station from a parsed feed.
-pub fn process_station(feed: &FeedMessage, route: &str, station_id: &str) -> StationData {
+pub fn process_station(
+    feed: &FeedMessage,
+    route: &str,
+    station_id: &str,
+) -> StationData {
     let now_secs = feed.header.timestamp.unwrap_or(0);
     let arrivals = collect_arrivals(feed, route, station_id, now_secs);
 
@@ -62,7 +66,8 @@ fn collect_arrivals(
         let trip_route = match trip.route_id.as_deref() {
             Some(r) if !r.is_empty() => r,
             _ => {
-                route_owned = route_from_trip_id(trip.trip_id.as_deref().unwrap_or(""));
+                route_owned =
+                    route_from_trip_id(trip.trip_id.as_deref().unwrap_or(""));
                 route_owned.as_str()
             }
         };
@@ -90,7 +95,9 @@ fn collect_arrivals(
             } // skip terminal
 
             let arrival = &stu.arrival;
-            let Some(arrival_time) = arrival.time.and_then(|t| u64::try_from(t).ok()) else {
+            let Some(arrival_time) =
+                arrival.time.and_then(|t| u64::try_from(t).ok())
+            else {
                 continue;
             };
 
@@ -117,7 +124,10 @@ fn collect_arrivals(
     arrivals
 }
 
-fn build_platforms(arrivals: BTreeMap<String, Vec<RawArrival>>, now_secs: u64) -> Vec<Platform> {
+fn build_platforms(
+    arrivals: BTreeMap<String, Vec<RawArrival>>,
+    now_secs: u64,
+) -> Vec<Platform> {
     let mut platforms: Vec<Platform> = arrivals
         .into_iter()
         .map(|(stop_id, mut trains)| {

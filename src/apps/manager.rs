@@ -47,7 +47,12 @@ impl AppManager {
         }
     }
 
-    pub fn update(&mut self, dt_ms: f32, is_connected: bool, ip: Option<String>) {
+    pub fn update(
+        &mut self,
+        dt_ms: f32,
+        is_connected: bool,
+        ip: Option<String>,
+    ) {
         // Auto-hide settings if we just connected and were previously disconnected
         if !self.was_connected && is_connected && self.show_settings {
             self.show_settings = false;

@@ -1,11 +1,14 @@
 use anyhow::{anyhow, Result};
 use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs};
 use esp_idf_svc::wifi::{
-    AccessPointConfiguration, AuthMethod, ClientConfiguration, Configuration, EspWifi,
+    AccessPointConfiguration, AuthMethod, ClientConfiguration, Configuration,
+    EspWifi,
 };
 use log::info;
 
-pub fn get_credentials(nvs_partition: &EspDefaultNvsPartition) -> (String, String) {
+pub fn get_credentials(
+    nvs_partition: &EspDefaultNvsPartition,
+) -> (String, String) {
     let Ok(nvs) = EspNvs::new(nvs_partition.clone(), "wifi_creds", true) else {
         return (
             crate::config::WIFI_SSID.to_string(),
@@ -86,8 +89,8 @@ pub fn connect_wifi(
     use esp_idf_svc::sys::{
         esp_netif_dhcp_option_id_t_ESP_NETIF_DOMAIN_NAME_SERVER,
         esp_netif_dhcp_option_mode_t_ESP_NETIF_OP_SET, esp_netif_dhcps_option,
-        esp_netif_dns_info_t, esp_netif_dns_type_t_ESP_NETIF_DNS_MAIN, esp_netif_get_ip_info,
-        esp_netif_ip_info_t, esp_netif_set_dns_info,
+        esp_netif_dns_info_t, esp_netif_dns_type_t_ESP_NETIF_DNS_MAIN,
+        esp_netif_get_ip_info, esp_netif_ip_info_t, esp_netif_set_dns_info,
     };
 
     #[allow(unsafe_code, reason = "Calling C FFI for DHCP options")]

@@ -48,8 +48,8 @@ const STATION_CONFIGS: &[StationConfig] = &[
     StationConfig {
         route: "E",
         stop_id: "G08",
-    }, // Court Sq-23 St
-       // StationConfig { route: "F", stop_id: "G24"  }, // 21 St (F & G share this stop area)
+    }, /* Court Sq-23 St
+        * StationConfig { route: "F", stop_id: "G24"  }, // 21 St (F & G share this stop area) */
 ];
 
 // Cycle through stations every N seconds if there is nothing to scroll
@@ -81,7 +81,10 @@ impl MtaApp {
 
         Self {
             fetch_task: None,
-            shared_stations: Arc::new(Mutex::new((false, initial_stations.clone()))),
+            shared_stations: Arc::new(Mutex::new((
+                false,
+                initial_stations.clone(),
+            ))),
             stations: initial_stations,
             current_idx: 0,
             scroll_elapsed_ms: 0.0,
@@ -91,14 +94,16 @@ impl MtaApp {
     }
 
     fn current_station(&self) -> &StationData {
-        &self.stations[self.current_idx.min(self.stations.len().saturating_sub(1))]
+        &self.stations
+            [self.current_idx.min(self.stations.len().saturating_sub(1))]
     }
 
     fn advance_scroll(&mut self, dt_ms: f32) {
         self.scroll_elapsed_ms += dt_ms;
         if self.scroll_elapsed_ms >= self.scroll_cycle_ms {
             self.scroll_elapsed_ms = 0.0;
-            self.current_idx = (self.current_idx + 1) % self.stations.len().max(1);
+            self.current_idx =
+                (self.current_idx + 1) % self.stations.len().max(1);
             self.recalculate_cycle();
         }
     }
@@ -121,9 +126,10 @@ impl App for MtaApp {
         // Delay network fetch by 250ms to prevent thread explosion on rapid app rotation
         if self.fetch_task.is_none() && self.time_ms > 250.0 {
             let shared = self.shared_stations.clone();
-            self.fetch_task = Some(TimerTask::spawn(Duration::from_secs(60), move || {
-                fetch_all_stations(&shared);
-            }));
+            self.fetch_task =
+                Some(TimerTask::spawn(Duration::from_secs(60), move || {
+                    fetch_all_stations(&shared);
+                }));
         }
 
         // Poll shared background fetch for fresh data incrementally
@@ -168,14 +174,26 @@ fn fetch_all_stations(shared: &Arc<Mutex<(bool, Vec<StationData>)>>) {
 
         let station = match http::fetch_binary(feed_url) {
             Ok(data) => {
-                match crate::proto::transit_realtime::FeedMessage::decode(&mut data.as_slice()) {
+                match crate::proto::transit_realtime::FeedMessage::decode(
+                    &mut data.as_slice(),
+                ) {
                     Ok(feed_msg) => {
-                        let st = feed::process_station(&feed_msg, config.route, config.stop_id);
-                        info!("MTA: parsed station {}: {:?}", config.stop_id, st.state);
+                        let st = feed::process_station(
+                            &feed_msg,
+                            config.route,
+                            config.stop_id,
+                        );
+                        info!(
+                            "MTA: parsed station {}: {:?}",
+                            config.stop_id, st.state
+                        );
                         st
                     }
                     Err(e) => {
-                        info!("MTA: Proto parse error for {}: {}", config.route, e);
+                        info!(
+                            "MTA: Proto parse error for {}: {}",
+                            config.route, e
+                        );
                         StationData {
                             route: config.route.to_string(),
                             state: StationState::NoTrains,

@@ -33,7 +33,8 @@ impl App for PlasmaApp {
                 let v2 = yf.mul_add(0.2, self.time * 0.8).sin();
                 let v3 = (xf + yf).mul_add(0.1, self.time * 1.2).sin();
 
-                let dist = (xf - width as f32 / 2.0).hypot(yf - height as f32 / 2.0);
+                let dist =
+                    (xf - width as f32 / 2.0).hypot(yf - height as f32 / 2.0);
                 let v4 = (dist * 0.15 + self.time * 1.5).sin();
 
                 // Combine them
@@ -41,8 +42,12 @@ impl App for PlasmaApp {
 
                 // Map value to RGB using phase offsets
                 let r = (v * PI / 2.0).sin().mul_add(127.0, 128.0) as u8;
-                let g = (v * PI / 2.0 + 2.0 * PI / 3.0).sin().mul_add(127.0, 128.0) as u8;
-                let b = (v * PI / 2.0 + 4.0 * PI / 3.0).sin().mul_add(127.0, 128.0) as u8;
+                let g = (v * PI / 2.0 + 2.0 * PI / 3.0)
+                    .sin()
+                    .mul_add(127.0, 128.0) as u8;
+                let b = (v * PI / 2.0 + 4.0 * PI / 3.0)
+                    .sin()
+                    .mul_add(127.0, 128.0) as u8;
 
                 let index = (y * width + x) as usize;
                 buffer.pixels[index] = Rgb888::new(r, g, b);

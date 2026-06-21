@@ -85,16 +85,21 @@ impl App for SettingsApp {
 
             // Draw Warning Triangle over the black background
             let warning_color = Rgb888::new(255, 200, 0); // Yellow
-            let _ = Triangle::new(Point::new(10, 10), Point::new(4, 20), Point::new(16, 20))
-                .into_styled(PrimitiveStyle::with_stroke(warning_color, 1))
-                .draw(buffer);
+            let _ = Triangle::new(
+                Point::new(10, 10),
+                Point::new(4, 20),
+                Point::new(16, 20),
+            )
+            .into_styled(PrimitiveStyle::with_stroke(warning_color, 1))
+            .draw(buffer);
             let _ = Line::new(Point::new(10, 13), Point::new(10, 16))
                 .into_styled(PrimitiveStyle::with_stroke(warning_color, 1))
                 .draw(buffer);
             let _ = Pixel(Point::new(10, 18), warning_color).draw(buffer);
         } else if is_connected {
             // Connected Mode
-            let _ = Text::new("WiFi Connected", Point::new(4, 12), text_style).draw(buffer);
+            let _ = Text::new("WiFi Connected", Point::new(4, 12), text_style)
+                .draw(buffer);
             let _ = Text::new(
                 self.ip.as_deref().unwrap_or(""),
                 Point::new(4, 26),
@@ -103,7 +108,8 @@ impl App for SettingsApp {
             .draw(buffer);
         } else {
             // Connecting Mode
-            let _ = Text::new("WiFi Setup", Point::new(4, 12), text_style).draw(buffer);
+            let _ = Text::new("WiFi Setup", Point::new(4, 12), text_style)
+                .draw(buffer);
             let dots = match (self.time * 2.0) as i32 % 4 {
                 0 => "Connecting",
                 1 => "Connecting.",

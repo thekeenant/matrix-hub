@@ -40,11 +40,12 @@ fn main() -> Result<()> {
     // to avoid OOM fragmentation failures later when rotating apps
     crate::task::init();
 
-    let peripherals =
-        Peripherals::take().map_err(|_| anyhow::anyhow!("Failed to take peripherals"))?;
-    let sysloop =
-        EspSystemEventLoop::take().map_err(|_| anyhow::anyhow!("Failed to take sysloop"))?;
-    let nvs = EspDefaultNvsPartition::take().map_err(|_| anyhow::anyhow!("Failed to take nvs"))?;
+    let peripherals = Peripherals::take()
+        .map_err(|_| anyhow::anyhow!("Failed to take peripherals"))?;
+    let sysloop = EspSystemEventLoop::take()
+        .map_err(|_| anyhow::anyhow!("Failed to take sysloop"))?;
+    let nvs = EspDefaultNvsPartition::take()
+        .map_err(|_| anyhow::anyhow!("Failed to take nvs"))?;
 
     let btn_driver = PinDriver::input(peripherals.pins.gpio6, Pull::Up)?;
     let mut btn_up = Button::new(btn_driver);
@@ -58,21 +59,25 @@ fn main() -> Result<()> {
     let (display_ready_tx, display_ready_rx) = mpsc::sync_channel::<()>(1);
 
     // Load brightness from NVS if available
-    if let Ok(nvs_storage) = esp_idf_svc::nvs::EspNvs::new(nvs.clone(), "matrix_config", true) {
+    if let Ok(nvs_storage) =
+        esp_idf_svc::nvs::EspNvs::new(nvs.clone(), "matrix_config", true)
+    {
         if let Ok(Some(b)) = nvs_storage.get_u8("brightness") {
-            crate::display::GLOBAL_BRIGHTNESS.store(b, std::sync::atomic::Ordering::Relaxed);
+            crate::display::GLOBAL_BRIGHTNESS
+                .store(b, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
     // =========================================================================
     // Core 1: The Display Actor
     // =========================================================================
-    let core1_config = esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration {
-        pin_to_core: Some(esp_idf_svc::hal::cpu::Core::Core1),
-        stack_size: 8192,
-        priority: 20, // VERY high priority so display never stutters
-        ..Default::default()
-    };
+    let core1_config =
+        esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration {
+            pin_to_core: Some(esp_idf_svc::hal::cpu::Core::Core1),
+            stack_size: 8192,
+            priority: 20, // VERY high priority so display never stutters
+            ..Default::default()
+        };
     core1_config
         .set()
         .map_err(|e| anyhow::anyhow!("Failed to set core 1 config: {:?}", e))?;
@@ -102,18 +107,22 @@ fn main() -> Result<()> {
             oe: PIN_OE,
             clk: PIN_CLK,
         })
-        .unwrap_or_else(|_| panic!("CRITICAL: Failed to initialize Matrix Display!"));
+        .unwrap_or_else(|_| {
+            panic!("CRITICAL: Failed to initialize Matrix Display!")
+        });
 
         info!("Display hardware ready!");
 
         // Signal the main thread that DMA memory is safely allocated!
         let _ = display_ready_tx.send(());
 
-        let mut current_brightness = crate::display::GLOBAL_BRIGHTNESS.load(std::sync::atomic::Ordering::Relaxed);
+        let mut current_brightness = crate::display::GLOBAL_BRIGHTNESS
+            .load(std::sync::atomic::Ordering::Relaxed);
         display.set_brightness(current_brightness);
 
         while let Ok(framebuffer) = rx.recv() {
-            let new_brightness = crate::display::GLOBAL_BRIGHTNESS.load(std::sync::atomic::Ordering::Relaxed);
+            let new_brightness = crate::display::GLOBAL_BRIGHTNESS
+                .load(std::sync::atomic::Ordering::Relaxed);
             if new_brightness != current_brightness {
                 current_brightness = new_brightness;
                 display.set_brightness(current_brightness);
@@ -122,11 +131,8 @@ fn main() -> Result<()> {
             display.clear_display();
 
             let width = WIDTH as usize;
-            let iter = framebuffer
-                .pixels
-                .iter()
-                .enumerate()
-                .filter_map(|(i, &color)| {
+            let iter = framebuffer.pixels.iter().enumerate().filter_map(
+                |(i, &color)| {
                     if color.r() == 0 && color.g() == 0 && color.b() == 0 {
                         None
                     } else {
@@ -134,7 +140,8 @@ fn main() -> Result<()> {
                         let y = (i / width) as i32;
                         Some(Pixel(Point::new(x, y), color))
                     }
-                });
+                },
+            );
 
             let _ = display.draw_iter(iter);
             display.flip();
@@ -144,13 +151,15 @@ fn main() -> Result<()> {
     // Reset thread config back to default BEFORE waiting, just in case
     esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration::default()
         .set()
-        .map_err(|e| anyhow::anyhow!("Failed to reset thread config: {:?}", e))?;
+        .map_err(|e| {
+            anyhow::anyhow!("Failed to reset thread config: {:?}", e)
+        })?;
 
     // Block until the display has successfully grabbed its 114KB of contiguous DMA memory
     info!("Waiting for Display to allocate DMA memory...");
-    display_ready_rx
-        .recv()
-        .unwrap_or_else(|_| panic!("Display thread crashed before signaling ready!"));
+    display_ready_rx.recv().unwrap_or_else(|_| {
+        panic!("Display thread crashed before signaling ready!")
+    });
 
     // =========================================================================
     // Core 0: WiFi Initialization (Delayed until after Display)
@@ -159,7 +168,8 @@ fn main() -> Result<()> {
     let mut wifi = EspWifi::new(peripherals.modem, sysloop, Some(nvs.clone()))
         .map_err(|e| anyhow::anyhow!("Failed to create EspWifi: {:?}", e))?;
 
-    network::wifi::connect_wifi(&mut wifi, &nvs).context("Failed to connect to WiFi")?;
+    network::wifi::connect_wifi(&mut wifi, &nvs)
+        .context("Failed to connect to WiFi")?;
 
     let (wifi_tx, wifi_rx) = std::sync::mpsc::channel();
 
@@ -174,7 +184,10 @@ fn main() -> Result<()> {
     // =========================================================================
     // Boost the main task's priority so it preempts background network tasks,
     // avoiding the memory overhead of spawning an extra thread.
-    #[allow(unsafe_code, reason = "ESP-IDF FFI required to change task priority")]
+    #[allow(
+        unsafe_code,
+        reason = "ESP-IDF FFI required to change task priority"
+    )]
     unsafe {
         esp_idf_svc::sys::vTaskPrioritySet(std::ptr::null_mut(), 15);
     }
@@ -216,13 +229,21 @@ fn main() -> Result<()> {
                     Ok(info) if info.ip.to_string() != "0.0.0.0" => {
                         // Switch to Client mode to drop the AP once connected
                         if !is_connected {
-                            if let Ok(esp_idf_svc::wifi::Configuration::Mixed(client_cfg, _)) =
-                                wifi.get_configuration()
+                            if let Ok(
+                                esp_idf_svc::wifi::Configuration::Mixed(
+                                    client_cfg,
+                                    _,
+                                ),
+                            ) = wifi.get_configuration()
                             {
                                 let _ = wifi.set_configuration(
-                                    &esp_idf_svc::wifi::Configuration::Client(client_cfg),
+                                    &esp_idf_svc::wifi::Configuration::Client(
+                                        client_cfg,
+                                    ),
                                 );
-                                log::info!("Switched to Client-only mode, AP dropped.");
+                                log::info!(
+                                    "Switched to Client-only mode, AP dropped."
+                                );
                             }
                         }
                         is_connected = true;

@@ -1,0 +1,10 @@
+#!/bin/bash
+set -e
+
+echo "Running cargo fmt..."
+cargo fmt --all -- --check
+
+echo "Running cargo clippy..."
+cargo clippy --all-targets --all-features --workspace -- -D warnings
+
+echo "All checks passed!"

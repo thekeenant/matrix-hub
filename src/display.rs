@@ -1,8 +1,8 @@
 use embedded_graphics::pixelcolor::Rgb888;
 use embedded_graphics::prelude::*;
 use esp_idf_svc::sys::hub75::{
-    hub75_c_begin, hub75_c_clear, hub75_c_create, hub75_c_draw_pixel, hub75_c_flip_buffer,
-    hub75_handle_t,
+    hub75_c_begin, hub75_c_clear, hub75_c_create, hub75_c_draw_pixel,
+    hub75_c_flip_buffer, hub75_handle_t,
 };
 use std::sync::atomic::AtomicU8;
 
@@ -39,11 +39,15 @@ pub struct MatrixConfig {
 
 impl MatrixDisplay {
     pub fn new(cfg: MatrixConfig) -> Result<Self, &'static str> {
-        #[allow(unsafe_code, reason = "Calling C FFI for Hub75 display creation")]
+        #[allow(
+            unsafe_code,
+            reason = "Calling C FFI for Hub75 display creation"
+        )]
         let handle = unsafe {
             hub75_c_create(
-                cfg.width, cfg.height, cfg.r1, cfg.g1, cfg.b1, cfg.r2, cfg.g2, cfg.b2, cfg.a,
-                cfg.b, cfg.c, cfg.d, cfg.e, cfg.lat, cfg.oe, cfg.clk,
+                cfg.width, cfg.height, cfg.r1, cfg.g1, cfg.b1, cfg.r2, cfg.g2,
+                cfg.b2, cfg.a, cfg.b, cfg.c, cfg.d, cfg.e, cfg.lat, cfg.oe,
+                cfg.clk,
             )
         };
 
@@ -79,7 +83,10 @@ impl MatrixDisplay {
     }
 
     pub fn set_brightness(&self, brightness: u8) {
-        #[allow(unsafe_code, reason = "Calling C FFI for Hub75 display brightness")]
+        #[allow(
+            unsafe_code,
+            reason = "Calling C FFI for Hub75 display brightness"
+        )]
         unsafe {
             hub75_c_set_brightness(self.handle, brightness);
         }
@@ -100,7 +107,10 @@ impl DrawTarget for MatrixDisplay {
                 && coord.x < self.width as i32
                 && coord.y < self.height as i32
             {
-                #[allow(unsafe_code, reason = "Calling C FFI to draw pixel on Hub75 display")]
+                #[allow(
+                    unsafe_code,
+                    reason = "Calling C FFI to draw pixel on Hub75 display"
+                )]
                 unsafe {
                     hub75_c_draw_pixel(
                         self.handle,

@@ -42,7 +42,11 @@ pub struct ScrollState {
 }
 
 impl ScrollState {
-    pub fn calculate_offset(&self, text_width: i32, available_width: i32) -> i32 {
+    pub fn calculate_offset(
+        &self,
+        text_width: i32,
+        available_width: i32,
+    ) -> i32 {
         if text_width <= available_width {
             return 0;
         }
@@ -67,7 +71,8 @@ impl ScrollState {
             return 5000.0; // no scroll needed, just display time
         }
         let max_scroll = text_width - available_width;
-        SCROLL_TIME_PER_PIXEL_MS.mul_add(max_scroll as f32, SCROLL_HOLD_START_MS)
+        SCROLL_TIME_PER_PIXEL_MS
+            .mul_add(max_scroll as f32, SCROLL_HOLD_START_MS)
             + SCROLL_HOLD_END_MS
     }
 }
@@ -103,19 +108,24 @@ impl DrawTarget for ClippedFramebuffer<'_> {
     where
         I: IntoIterator<Item = Pixel<Self::Color>>,
     {
-        let filtered = pixels
-            .into_iter()
-            .filter(|Pixel(coord, _)| match &self.shape {
-                ClipShape::BoundingBox {
-                    left,
-                    right,
-                    top,
-                    bottom,
-                } => coord.x >= *left && coord.x < *right && coord.y >= *top && coord.y < *bottom,
-                ClipShape::Diamond { cx, cy, r } => {
-                    (coord.x - cx).abs() + (coord.y - cy).abs() <= *r
-                }
-            });
+        let filtered = pixels.into_iter().filter(|Pixel(coord, _)| match &self
+            .shape
+        {
+            ClipShape::BoundingBox {
+                left,
+                right,
+                top,
+                bottom,
+            } => {
+                coord.x >= *left
+                    && coord.x < *right
+                    && coord.y >= *top
+                    && coord.y < *bottom
+            }
+            ClipShape::Diamond { cx, cy, r } => {
+                (coord.x - cx).abs() + (coord.y - cy).abs() <= *r
+            }
+        });
         self.target.draw_iter(filtered)
     }
 }
@@ -128,8 +138,13 @@ impl OriginDimensions for ClippedFramebuffer<'_> {
                 right,
                 top,
                 bottom,
-            } => Size::new((right - left).max(0) as u32, (bottom - top).max(0) as u32),
-            ClipShape::Diamond { r, .. } => Size::new((r * 2) as u32, (r * 2) as u32),
+            } => Size::new(
+                (right - left).max(0) as u32,
+                (bottom - top).max(0) as u32,
+            ),
+            ClipShape::Diamond { r, .. } => {
+                Size::new((r * 2) as u32, (r * 2) as u32)
+            }
         }
     }
 }
@@ -175,7 +190,7 @@ fn draw_train_circle(fb: &mut Framebuffer, route: &str, x: i32, y: i32) {
     };
     let letter_style = MonoTextStyle::new(font, info.letter_color);
     let text_width = display_route.len() as i32 * 6; // FONT_6X12 is 6px wide
-    
+
     // Shift text +1x and +1y for diamonds to perfectly center it
     let text_x = x + r - (text_width / 2) + if is_diamond { 1 } else { 0 };
     let text_y = y + if is_diamond { 1 } else { 0 }; // baseline
@@ -197,7 +212,8 @@ fn draw_train_circle(fb: &mut Framebuffer, route: &str, x: i32, y: i32) {
             }
         },
     };
-    let _ = Text::new(display_route, Point::new(text_x, text_y), letter_style).draw(&mut clipped);
+    let _ = Text::new(display_route, Point::new(text_x, text_y), letter_style)
+        .draw(&mut clipped);
 }
 
 pub struct ArrivalTime {
@@ -205,7 +221,11 @@ pub struct ArrivalTime {
     pub has_different_dest: bool,
 }
 
-fn render_arrival_times(fb: &mut Framebuffer, y_pos: i32, times: &[ArrivalTime]) -> i32 {
+fn render_arrival_times(
+    fb: &mut Framebuffer,
+    y_pos: i32,
+    times: &[ArrivalTime],
+) -> i32 {
     let style = MonoTextStyle::new(&FONT_7X13, Rgb888::new(0x88, 0x88, 0x88));
     let display_width = crate::config::WIDTH as i32;
 
@@ -301,7 +321,8 @@ pub fn render_row(
 
 fn resolve_destination<'a>(train: &Train, direction: &'a str) -> &'a str {
     // Strip trailing direction N/S for lookup
-    let base_id = if train.terminal_stop_id.ends_with('N') || train.terminal_stop_id.ends_with('S')
+    let base_id = if train.terminal_stop_id.ends_with('N')
+        || train.terminal_stop_id.ends_with('S')
     {
         &train.terminal_stop_id[..train.terminal_stop_id.len() - 1]
     } else {
@@ -326,7 +347,9 @@ pub fn compute_cycle_ms(platforms: &[Platform]) -> f32 {
             let dest = resolve_destination(first, &platform.direction);
             let text_w = dest.len() as i32 * CHAR_WIDTH;
             let times_w = 2 * (3 * TIME_CHAR_WIDTH + TIME_SPACING); // estimate "10m 5m"
-            let avail = display_width - (TRAIN_CIRCLE_RADIUS * 2 + 2 + CLIP_MARGIN) - times_w;
+            let avail = display_width
+                - (TRAIN_CIRCLE_RADIUS * 2 + 2 + CLIP_MARGIN)
+                - times_w;
             let cycle = ScrollState::cycle_ms_for(text_w, avail);
             if cycle > max {
                 max = cycle;
@@ -374,7 +397,8 @@ pub fn render_station(
         StationState::Live(platforms) => {
             for (i, platform) in platforms.iter().enumerate().take(2) {
                 if let Some(first_train) = platform.trains.first() {
-                    let dest = resolve_destination(first_train, &platform.direction);
+                    let dest =
+                        resolve_destination(first_train, &platform.direction);
                     let times = arrival_times(platform, 2);
                     let y = FIRST_ROW_Y + i as i32 * ROW_HEIGHT;
                     render_row(fb, y, &first_train.route, dest, &times, scroll);

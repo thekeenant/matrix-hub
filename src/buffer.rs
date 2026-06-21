@@ -28,7 +28,11 @@ impl DrawTarget for Framebuffer {
         I: IntoIterator<Item = Pixel<Self::Color>>,
     {
         for Pixel(coord, color) in pixels.into_iter() {
-            if coord.x >= 0 && coord.y >= 0 && coord.x < WIDTH as i32 && coord.y < HEIGHT as i32 {
+            if coord.x >= 0
+                && coord.y >= 0
+                && coord.x < WIDTH as i32
+                && coord.y < HEIGHT as i32
+            {
                 let index = (coord.y * WIDTH as i32 + coord.x) as usize;
                 self.pixels[index] = color;
             }

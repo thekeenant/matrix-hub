@@ -13,7 +13,8 @@ fn url_decode(encoded: &str) -> String {
             decoded.push(' ');
         } else if c == '%' {
             if let (Some(a), Some(b)) = (chars.next(), chars.next()) {
-                if let Ok(byte) = u8::from_str_radix(&format!("{}{}", a, b), 16) {
+                if let Ok(byte) = u8::from_str_radix(&format!("{}{}", a, b), 16)
+                {
                     decoded.push(byte as char);
                 }
             }
@@ -74,8 +75,11 @@ pub fn start_server(
     server.fn_handler("/*", Method::Get, |request| {
         info!("Captive Portal wildcard hit: {}", request.uri());
         // Redirect all other GET requests (Captive Portal checks) to the root URL
-        let mut response =
-            request.into_response(302, Some("Found"), &[("Location", "http://192.168.71.1/")])?;
+        let mut response = request.into_response(
+            302,
+            Some("Found"),
+            &[("Location", "http://192.168.71.1/")],
+        )?;
         response.write_all(b"Redirecting...")?;
         Ok::<(), anyhow::Error>(())
     })?;
@@ -104,7 +108,11 @@ pub fn start_server(
         let ssid = url_decode(ssid);
         let pass = url_decode(pass);
 
-        if let Err(e) = crate::network::wifi::save_credentials(nvs_clone.clone(), &ssid, &pass) {
+        if let Err(e) = crate::network::wifi::save_credentials(
+            nvs_clone.clone(),
+            &ssid,
+            &pass,
+        ) {
             let error_html = format!("Failed to save: {:?}", e);
             request
                 .into_status_response(500)?
@@ -116,7 +124,11 @@ pub fn start_server(
         let _ = credentials_tx.send((ssid, pass));
 
         // PRG Pattern: Redirect back to root
-        let mut response = request.into_response(303, Some("See Other"), &[("Location", "http://192.168.71.1/")])?;
+        let mut response = request.into_response(
+            303,
+            Some("See Other"),
+            &[("Location", "http://192.168.71.1/")],
+        )?;
         response.write_all(b"Redirecting...")?;
 
         Ok::<(), anyhow::Error>(())
@@ -133,23 +145,28 @@ pub fn start_server(
         for pair in body.split('&') {
             let mut kv = pair.split('=');
             if let (Some(k), Some(v)) = (kv.next(), kv.next()) {
-                match k {
-                    "brightness" => {
-                        if let Ok(b) = v.parse::<u8>() {
-                            crate::display::GLOBAL_BRIGHTNESS.store(b, std::sync::atomic::Ordering::Relaxed);
-                            if let Ok(store) = esp_idf_svc::nvs::EspNvs::new(nvs_clone_2.clone(), "matrix_config", true) {
-                                let _ = store.set_u8("brightness", b);
-                            }
+                if k == "brightness" {
+                    if let Ok(b) = v.parse::<u8>() {
+                        crate::display::GLOBAL_BRIGHTNESS
+                            .store(b, std::sync::atomic::Ordering::Relaxed);
+                        if let Ok(store) = esp_idf_svc::nvs::EspNvs::new(
+                            nvs_clone_2.clone(),
+                            "matrix_config",
+                            true,
+                        ) {
+                            let _ = store.set_u8("brightness", b);
                         }
                     }
-                    // Add more generic settings parsing here in the future
-                    _ => {}
                 }
             }
         }
 
         // PRG Pattern: Redirect back to root
-        let mut response = request.into_response(303, Some("See Other"), &[("Location", "http://192.168.71.1/")])?;
+        let mut response = request.into_response(
+            303,
+            Some("See Other"),
+            &[("Location", "http://192.168.71.1/")],
+        )?;
         response.write_all(b"Redirecting...")?;
 
         Ok::<(), anyhow::Error>(())

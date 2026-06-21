@@ -201,6 +201,7 @@ fn main() -> Result<()> {
         let mut is_connected = false;
         let mut ip_str: Option<String> = None;
         let mut wifi_check_countdown = 0u32;
+        let mut wifi_reconnect_countdown: Option<u32> = None;
 
         loop {
             if btn_up.is_clicked() {
@@ -212,10 +213,20 @@ fn main() -> Result<()> {
 
             // Check for new credentials from HTTP server
             if let Ok((_new_ssid, _new_pass)) = wifi_rx.try_recv() {
-                log::info!("Received new credentials! Reconnecting...");
-                let _ = network::wifi::connect_wifi(&mut wifi);
-                is_connected = false;
-                ip_str = None;
+                log::info!("Received new credentials! Scheduling reconnect in 1s to allow HTTP response to flush...");
+                wifi_reconnect_countdown = Some(60); // 60 frames = ~1 second
+            }
+
+            if let Some(count) = wifi_reconnect_countdown {
+                if count == 0 {
+                    log::info!("Reconnecting WiFi now...");
+                    let _ = network::wifi::connect_wifi(&mut wifi);
+                    is_connected = false;
+                    ip_str = None;
+                    wifi_reconnect_countdown = None;
+                } else {
+                    wifi_reconnect_countdown = Some(count - 1);
+                }
             }
 
             // Re-check WiFi IP status once per second (~every 60 frames) to avoid

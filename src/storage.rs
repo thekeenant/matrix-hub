@@ -24,6 +24,13 @@ pub fn global_config() -> &'static RwLock<DeviceConfig> {
     CONFIG.get_or_init(|| RwLock::new(DeviceConfig::default_config()))
 }
 
+pub fn get_config() -> DeviceConfig {
+    match global_config().read() {
+        Ok(guard) => guard.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    }
+}
+
 pub fn global_nvs() -> &'static OnceLock<EspDefaultNvsPartition> {
     static NVS: OnceLock<EspDefaultNvsPartition> = OnceLock::new();
     &NVS

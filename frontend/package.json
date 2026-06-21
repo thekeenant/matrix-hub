@@ -1,0 +1,26 @@
+{
+  "name": "frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "generate:proto": "mkdir -p ./src/generated && protoc --plugin=protoc-gen-ts_proto=./node_modules/.bin/protoc-gen-ts_proto --ts_proto_out=./src/generated -I=.. ../proto/*.proto",
+    "predev": "npm run generate:proto",
+    "prebuild": "npm run generate:proto",
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "preact": "^10.29.1"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.5",
+    "@types/node": "^24.12.3",
+    "protobufjs": "^8.6.4",
+    "ts-proto": "^2.11.8",
+    "typescript": "~6.0.2",
+    "vite": "^8.0.12",
+    "vite-plugin-compression": "^0.5.1"
+  }
+}

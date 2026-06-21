@@ -4,13 +4,10 @@ use esp_idf_svc::sys::hub75::{
     hub75_c_begin, hub75_c_clear, hub75_c_create, hub75_c_draw_pixel,
     hub75_c_flip_buffer, hub75_handle_t,
 };
-use std::sync::atomic::AtomicU8;
 
 extern "C" {
     fn hub75_c_set_brightness(handle: hub75_handle_t, brightness: u8);
 }
-
-pub static GLOBAL_BRIGHTNESS: AtomicU8 = AtomicU8::new(128);
 
 pub struct MatrixDisplay {
     handle: hub75_handle_t,

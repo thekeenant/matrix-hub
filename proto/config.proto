@@ -15,3 +15,11 @@ message DeviceConfig {
     // Global LED brightness level (0-255)
     uint32 brightness = 2;
 }
+
+// Request to update the device configuration following AIP-134
+message UpdateConfigRequest {
+    // The configuration to update.
+    DeviceConfig config = 1;
+    // The list of fields to update.
+    repeated string update_mask = 2;
+}

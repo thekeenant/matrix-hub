@@ -5,26 +5,6 @@ use esp_idf_svc::io::Write;
 
 use log::info;
 
-fn url_decode(encoded: &str) -> String {
-    let mut decoded = String::new();
-    let mut chars = encoded.chars();
-    while let Some(c) = chars.next() {
-        if c == '+' {
-            decoded.push(' ');
-        } else if c == '%' {
-            if let (Some(a), Some(b)) = (chars.next(), chars.next()) {
-                if let Ok(byte) = u8::from_str_radix(&format!("{}{}", a, b), 16)
-                {
-                    decoded.push(byte as char);
-                }
-            }
-        } else {
-            decoded.push(c);
-        }
-    }
-    decoded
-}
-
 pub fn start_server(
     credentials_tx: std::sync::mpsc::Sender<(String, String)>,
 ) -> Result<EspHttpServer<'static>> {
@@ -35,39 +15,109 @@ pub fn start_server(
     let mut server = EspHttpServer::new(&config)
         .map_err(|e| anyhow::anyhow!("Failed to create server: {:?}", e))?;
 
-    server.fn_handler("/", Method::Get, |request| {
-        let current_brightness = crate::display::GLOBAL_BRIGHTNESS.load(std::sync::atomic::Ordering::Relaxed);
-        let html = format!(r#"<!DOCTYPE html>
-<html>
-<head>
-    <title>Matrix-Hub Setup</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        body {{ font-family: sans-serif; margin: 40px auto; max-width: 400px; padding: 20px; }}
-        input[type="text"], input[type="password"], input[type="number"] {{ width: 100%; padding: 10px; margin: 10px 0; box-sizing: border-box; }}
-        input[type="submit"] {{ background-color: #4CAF50; color: white; padding: 14px 20px; margin: 8px 0; border: none; cursor: pointer; width: 100%; }}
-    </style>
-</head>
-<body>
-    <h2>WiFi Setup</h2>
-    <form action="/save" method="POST" style="margin-bottom: 20px;">
-        <label>SSID:</label>
-        <input type="text" name="ssid" required>
-        <label>Password:</label>
-        <input type="password" name="pass">
-        <input type="submit" value="Save & Connect">
-    </form>
+    // Embed frontend assets
+    const INDEX_HTML: &[u8] =
+        include_bytes!("../../frontend/dist/index.html.gz");
+    const BUNDLE_JS: &[u8] =
+        include_bytes!("../../frontend/dist/assets/bundle.js.gz");
+    const BUNDLE_CSS: &[u8] =
+        include_bytes!("../../frontend/dist/assets/bundle.css.gz");
 
-    <h2>Display Settings</h2>
-    <form action="/settings" method="POST">
-        <label>Brightness (0-255):</label>
-        <input type="number" name="brightness" min="0" max="255" value="{}" required>
-        <!-- Add future settings here -->
-        <input type="submit" value="Save Settings">
-    </form>
-</body>
-</html>"#, current_brightness);
-        request.into_ok_response()?.write_all(html.as_bytes())?;
+    server.fn_handler("/", Method::Get, |request| {
+        let mut response = request.into_response(
+            200,
+            None,
+            &[("Content-Encoding", "gzip"), ("Content-Type", "text/html")],
+        )?;
+        response.write_all(INDEX_HTML)?;
+        Ok::<(), anyhow::Error>(())
+    })?;
+
+    server.fn_handler("/assets/bundle.js", Method::Get, |request| {
+        let mut response = request.into_response(
+            200,
+            None,
+            &[
+                ("Content-Encoding", "gzip"),
+                ("Content-Type", "application/javascript"),
+            ],
+        )?;
+        response.write_all(BUNDLE_JS)?;
+        Ok::<(), anyhow::Error>(())
+    })?;
+
+    server.fn_handler("/assets/bundle.css", Method::Get, |request| {
+        let mut response = request.into_response(
+            200,
+            None,
+            &[("Content-Encoding", "gzip"), ("Content-Type", "text/css")],
+        )?;
+        response.write_all(BUNDLE_CSS)?;
+        Ok::<(), anyhow::Error>(())
+    })?;
+
+    server.fn_handler("/api/config", Method::Get, |request| {
+        use buffa::Message;
+        let config = crate::storage::get_config();
+        let bytes = config.encode_to_vec();
+
+        let mut response = request.into_response(
+            200,
+            None,
+            &[("Content-Type", "application/octet-stream")],
+        )?;
+        response.write_all(&bytes)?;
+        Ok::<(), anyhow::Error>(())
+    })?;
+
+    server.fn_handler("/api/config", Method::Post, move |mut request| {
+        use buffa::Message;
+        let mut buf = vec![0; 1024];
+        let bytes_read = request.read(&mut buf).unwrap_or(0);
+        let mut slice = &buf[..bytes_read];
+
+        let Ok(update_req) =
+            crate::proto::config::UpdateConfigRequest::decode(&mut slice)
+        else {
+            request
+                .into_status_response(400)?
+                .write_all(b"Bad Request")?;
+            return Ok::<(), anyhow::Error>(());
+        };
+
+        let Some(new_config) = update_req.config.into_option() else {
+            request.into_ok_response()?.write_all(b"OK")?;
+            return Ok::<(), anyhow::Error>(());
+        };
+
+        let update_wifi = update_req.update_mask.contains(&"wifi".to_string());
+        let update_brightness =
+            update_req.update_mask.contains(&"brightness".to_string());
+
+        if let Err(e) = crate::storage::update_config(|config| {
+            if update_wifi || update_req.update_mask.is_empty() {
+                config.wifi = new_config.wifi.clone();
+            }
+            if update_brightness || update_req.update_mask.is_empty() {
+                config.brightness = new_config.brightness;
+            }
+        }) {
+            request
+                .into_status_response(500)?
+                .write_all(format!("Failed to save: {:?}", e).as_bytes())?;
+            return Ok::<(), anyhow::Error>(());
+        }
+
+        // If WiFi was updated, tell the background task to attempt reconnection
+        if update_wifi || update_req.update_mask.is_empty() {
+            info!("WiFi credentials updated. Sending update event...");
+            let _ = credentials_tx.send((
+                new_config.wifi.ssid.clone(),
+                new_config.wifi.pass.clone(),
+            ));
+        }
+
+        request.into_ok_response()?.write_all(b"OK")?;
         Ok::<(), anyhow::Error>(())
     })?;
 
@@ -80,91 +130,6 @@ pub fn start_server(
             &[("Location", "http://192.168.71.1/")],
         )?;
         response.write_all(b"Redirecting...")?;
-        Ok::<(), anyhow::Error>(())
-    })?;
-
-    server.fn_handler("/save", Method::Post, move |mut request| {
-        let mut buf = vec![0; 512];
-        let bytes_read = request.read(&mut buf).unwrap_or(0);
-        let body = String::from_utf8_lossy(&buf[..bytes_read]);
-
-        let mut ssid = "";
-        let mut pass = "";
-
-        for pair in body.split('&') {
-            let mut kv = pair.split('=');
-            if let (Some(k), Some(v)) = (kv.next(), kv.next()) {
-                if k == "ssid" {
-                    ssid = v;
-                } else if k == "pass" {
-                    pass = v;
-                }
-            }
-        }
-
-        let ssid = url_decode(ssid);
-        let pass = url_decode(pass);
-
-        if let Err(e) = crate::storage::update_config(|config| {
-            config.wifi = buffa::MessageField::some(
-                crate::proto::config::WifiCredentials {
-                    ssid: ssid.clone(),
-                    pass: pass.clone(),
-                    __buffa_unknown_fields: Default::default(),
-                },
-            );
-        }) {
-            let error_html = format!("Failed to save: {:?}", e);
-            request
-                .into_status_response(500)?
-                .write_all(error_html.as_bytes())?;
-            return Ok::<(), anyhow::Error>(());
-        }
-
-        info!("Credentials & Config saved. Sending update event...");
-        let _ = credentials_tx.send((ssid, pass));
-
-        // PRG Pattern: Redirect back to root
-        let mut response = request.into_response(
-            303,
-            Some("See Other"),
-            &[("Location", "http://192.168.71.1/")],
-        )?;
-        response.write_all(b"Redirecting...")?;
-
-        Ok::<(), anyhow::Error>(())
-    })?;
-
-    server.fn_handler("/settings", Method::Post, move |mut request| {
-        let mut body = String::new();
-        let mut buf = [0u8; 128];
-        if let Ok(size) = request.read(&mut buf) {
-            body = String::from_utf8_lossy(&buf[..size]).into_owned();
-        }
-
-        for pair in body.split('&') {
-            let mut kv = pair.split('=');
-            let (Some(k), Some(v)) = (kv.next(), kv.next()) else {
-                continue;
-            };
-            if k != "brightness" {
-                continue;
-            };
-            let Ok(b) = v.parse::<u8>() else { continue };
-
-            let _ = crate::storage::update_config(|config| {
-                config.brightness = b as u32;
-            });
-        }
-
-        // PRG Pattern: Redirect back to root
-        let mut response = request.into_response(
-            303,
-            Some("See Other"),
-            &[("Location", "http://192.168.71.1/")],
-        )?;
-        response.write_all(b"Redirecting...")?;
-
         Ok::<(), anyhow::Error>(())
     })?;
 

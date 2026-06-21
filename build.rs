@@ -35,6 +35,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .compile()
         .map_err(|e| format!("Failed to compile protobufs: {e:?}"))?;
 
+    // Build the frontend
+    println!("cargo:rerun-if-changed=frontend/src");
+    println!("cargo:rerun-if-changed=frontend/package.json");
+    println!("cargo:rerun-if-changed=frontend/vite.config.ts");
+    println!("cargo:rerun-if-changed=proto/");
+
+    let status = std::process::Command::new("npm")
+        .current_dir("frontend")
+        .args(["run", "build"])
+        .status();
+
+    match status {
+        Ok(s) if !s.success() => {
+            panic!("npm run build failed in frontend directory");
+        }
+        Err(e) => {
+            println!("cargo:warning=Failed to run npm build in frontend directory: {}", e);
+        }
+        _ => {}
+    }
+
     // Generate stops mapping
     let out_dir = std::env::var("OUT_DIR")?;
     let dest_path = std::path::Path::new(&out_dir).join("stops.rs");

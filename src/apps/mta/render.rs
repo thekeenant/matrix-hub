@@ -14,7 +14,7 @@ use crate::apps::mta::data::{Platform, StationState, Train};
 use crate::apps::mta::routes::get_destination;
 use crate::apps::mta::routes::get_route_info;
 use crate::buffer::Framebuffer;
-use crate::fonts::{FONT_6X12, FONT_6X12_BOLD};
+use crate::fonts::{FONT_5X9, FONT_5X9_BOLD, FONT_6X12, FONT_6X12_BOLD};
 
 // ============================================================================
 // Layout Constants — identical to v0
@@ -183,17 +183,22 @@ fn draw_train_circle(fb: &mut Framebuffer, route: &str, x: i32, y: i32) {
             .draw(fb);
     }
 
-    let font = if info.is_bold {
-        &FONT_6X12_BOLD
+    let (font, char_width, baseline_adj) = if is_diamond {
+        if info.is_bold {
+            (&FONT_5X9_BOLD, 5, 0) // scaled down from FONT_6X12_BOLD
+        } else {
+            (&FONT_5X9, 5, 0)
+        }
+    } else if info.is_bold {
+        (&FONT_6X12_BOLD, 6, 0)
     } else {
-        &FONT_6X12
+        (&FONT_6X12, 6, 0)
     };
     let letter_style = MonoTextStyle::new(font, info.letter_color);
-    let text_width = display_route.len() as i32 * 6; // FONT_6X12 is 6px wide
+    let text_width = display_route.len() as i32 * char_width;
 
-    // Shift text +1x and +1y for diamonds to perfectly center it
-    let text_x = x + r - (text_width / 2) + if is_diamond { 1 } else { 0 };
-    let text_y = y + if is_diamond { 1 } else { 0 }; // baseline
+    let text_x = x + r - (text_width / 2);
+    let text_y = y + baseline_adj; // baseline
 
     let mut clipped = ClippedFramebuffer {
         target: fb,

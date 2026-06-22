@@ -216,9 +216,9 @@ fn main() -> Result<()> {
         info!("Logic Actor started on {:?}", esp_idf_svc::hal::cpu::core());
 
         let mut app_manager = AppManager::new(vec![
+            || Box::new(MtaApp::new()),
             || Box::new(PlasmaApp::new()),
             || Box::new(ParticleApp::new()),
-            || Box::new(MtaApp::new()),
             || Box::new(crate::apps::settings::SettingsApp::new()),
         ]);
 

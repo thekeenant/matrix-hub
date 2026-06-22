@@ -38,18 +38,36 @@ struct StationConfig {
 /// Routes: 7 train (default feed), G (G feed), E (ACE feed), F (BDFM feed).
 const STATION_CONFIGS: &[StationConfig] = &[
     StationConfig {
-        route: "7",
-        stop_id: "718",
-    }, // Vernon Blvd-Jackson Ave
+        route: "E",
+        stop_id: "A27",
+    },
     StationConfig {
         route: "G",
         stop_id: "G24",
-    }, // 21 St-Van Alst
+    },
     StationConfig {
-        route: "E",
-        stop_id: "G08",
-    }, /* Court Sq-23 St
-        * StationConfig { route: "F", stop_id: "G24"  }, // 21 St (F & G share this stop area) */
+        route: "7",
+        stop_id: "718",
+    },
+    // StationConfig { route: "1", stop_id: "120" },
+    // StationConfig { route: "2", stop_id: "120" },
+    // StationConfig { route: "3", stop_id: "120" },
+    // StationConfig { route: "4", stop_id: "631" },
+    // StationConfig { route: "5", stop_id: "631" },
+    // StationConfig { route: "6", stop_id: "631" },
+    // StationConfig { route: "A", stop_id: "A27" },
+    // StationConfig { route: "C", stop_id: "A27" },
+    // StationConfig { route: "B", stop_id: "D17" },
+    // StationConfig { route: "D", stop_id: "D17" },
+    // StationConfig { route: "F", stop_id: "D17" },
+    // StationConfig { route: "M", stop_id: "D17" },
+    // StationConfig { route: "N", stop_id: "R16" },
+    // StationConfig { route: "Q", stop_id: "R16" },
+    // StationConfig { route: "R", stop_id: "R16" },
+    // StationConfig { route: "W", stop_id: "R16" },
+    // StationConfig { route: "L", stop_id: "L08" },
+    // StationConfig { route: "J", stop_id: "M11" },
+    // StationConfig { route: "Z", stop_id: "M11" },
 ];
 
 // Cycle through stations every N seconds if there is nothing to scroll

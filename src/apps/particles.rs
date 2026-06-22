@@ -7,7 +7,6 @@ use embedded_graphics::primitives::{Circle, PrimitiveStyle};
 use rand::Rng;
 
 const NUM_PARTICLES: usize = 120;
-const GRAVITY: f32 = 0.15;
 
 // The Particle struct is now completely private!
 struct Particle {
@@ -20,6 +19,8 @@ struct Particle {
 
 pub struct ParticleApp {
     particles: Vec<Particle>,
+    gravity_x: f32,
+    gravity_y: f32,
 }
 
 impl ParticleApp {
@@ -41,33 +42,58 @@ impl ParticleApp {
             });
         }
 
-        Self { particles }
+        Self {
+            particles,
+            gravity_x: 0.0,
+            gravity_y: 0.15,
+        }
     }
 }
 
 impl App for ParticleApp {
+    fn set_accelerometer(&mut self, x: f32, y: f32, _z: f32) {
+        // Positive X tilt = Left side up (so particles should roll left, negative vx)
+        self.gravity_x = -x * 0.25;
+        // Add raw Y tilt to default gravity
+        self.gravity_y = y * 0.25 + 0.08;
+    }
+
     fn update(&mut self, _dt_ms: f32) {
         let mut rng = rand::thread_rng();
 
         for p in &mut self.particles {
-            p.vy += GRAVITY;
+            p.vx += self.gravity_x;
+            p.vy += self.gravity_y;
             p.x += p.vx;
             p.y += p.vy;
 
-            if p.x <= 0.0 || p.x >= WIDTH - 2.0 {
-                p.vx = -p.vx * 0.7;
-                p.x = p.x.clamp(0.0, WIDTH - 2.0);
+            // X-axis collision (left and right walls)
+            if p.x <= 0.0 {
+                p.x = 0.0;
+                p.vx = -p.vx * 0.5; // Bounce
+            } else if p.x >= WIDTH - 2.0 {
+                p.x = WIDTH - 2.0;
+                p.vx = -p.vx * 0.5; // Bounce
             }
 
+            // Y-axis collision (floor and ceiling)
             if p.y >= HEIGHT - 2.0 {
-                p.vy = -p.vy * 0.7;
                 p.y = HEIGHT - 2.0;
-                p.vx += rng.gen_range(-0.2..0.2);
+                p.vy = -p.vy * 0.5;
+                p.vx += rng.gen_range(-0.1..0.1); // Add some random friction noise
 
-                if p.vy.abs() < 1.0 {
-                    p.vy = rng.gen_range(-4.0..-2.0);
-                    p.vx = rng.gen_range(-2.0..2.0);
+                // If resting on the ground and gravity is mostly downwards, occasionally bounce
+                if p.vy.abs() < 1.0 && self.gravity_y > 0.05 {
+                    // Small chance to randomly pop up to keep it lively
+                    if rng.gen_bool(0.005) {
+                        p.vy = rng.gen_range(-2.0..-1.0);
+                        p.vx = rng.gen_range(-1.0..1.0);
+                    }
                 }
+            } else if p.y <= 0.0 {
+                // Bounce off ceiling if device is upside down
+                p.y = 0.0;
+                p.vy = -p.vy * 0.5;
             }
         }
     }

@@ -27,6 +27,10 @@ impl App for SettingsApp {
         self.time += dt_ms * 0.005;
     }
 
+    fn set_network_status(&mut self, _is_connected: bool, ip: Option<String>) {
+        self.ip = ip;
+    }
+
     fn draw(&self, buffer: &mut Framebuffer) {
         let pulse = (self.time * 2.0).sin().mul_add(50.0, 50.0) as u8;
 

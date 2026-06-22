@@ -16,7 +16,7 @@ use crate::apps::App;
 use crate::buffer::Framebuffer;
 use crate::network::http;
 use crate::task::TimerTask;
-use buffa::Message;
+
 use data::{StationData, StationState};
 use render::{compute_cycle_ms, render_station};
 use routes::get_route_info;
@@ -67,6 +67,7 @@ pub struct MtaApp {
     scroll_elapsed_ms: f32,
     scroll_cycle_ms: f32,
     time_ms: f32, // for spinner animation
+    is_connected: bool,
 }
 
 impl MtaApp {
@@ -90,6 +91,7 @@ impl MtaApp {
             scroll_elapsed_ms: 0.0,
             scroll_cycle_ms: MIN_STATION_DISPLAY_MS,
             time_ms: 0.0,
+            is_connected: false,
         }
     }
 
@@ -120,11 +122,18 @@ impl MtaApp {
 }
 
 impl App for MtaApp {
+    fn set_network_status(&mut self, is_connected: bool, _ip: Option<String>) {
+        self.is_connected = is_connected;
+    }
+
     fn update(&mut self, dt_ms: f32) {
         self.time_ms += dt_ms;
 
-        // Delay network fetch by 250ms to prevent thread explosion on rapid app rotation
-        if self.fetch_task.is_none() && self.time_ms > 250.0 {
+        // Delay network fetch by 250ms and WAIT for WiFi connection
+        if self.fetch_task.is_none()
+            && self.time_ms > 250.0
+            && self.is_connected
+        {
             let shared = self.shared_stations.clone();
             self.fetch_task =
                 Some(TimerTask::spawn(Duration::from_secs(60), move || {
@@ -174,32 +183,13 @@ fn fetch_all_stations(shared: &Arc<Mutex<(bool, Vec<StationData>)>>) {
 
         let station = match http::fetch_binary(feed_url) {
             Ok(data) => {
-                match crate::proto::transit_realtime::FeedMessage::decode(
-                    &mut data.as_slice(),
-                ) {
-                    Ok(feed_msg) => {
-                        let st = feed::process_station(
-                            &feed_msg,
-                            config.route,
-                            config.stop_id,
-                        );
-                        info!(
-                            "MTA: parsed station {}: {:?}",
-                            config.stop_id, st.state
-                        );
-                        st
-                    }
-                    Err(e) => {
-                        info!(
-                            "MTA: Proto parse error for {}: {}",
-                            config.route, e
-                        );
-                        StationData {
-                            route: config.route.to_string(),
-                            state: StationState::NoTrains,
-                        }
-                    }
-                }
+                let st = feed::process_station(
+                    data.as_slice(),
+                    config.route,
+                    config.stop_id,
+                );
+                info!("MTA: parsed station {}: {:?}", config.stop_id, st.state);
+                st
             }
             Err(e) => {
                 info!("MTA: fetch error for {}: {}", config.route, e);

@@ -57,6 +57,8 @@ fn main() -> Result<()> {
     let mut btn_down = Button::new(btn_down_driver);
 
     let (tx, rx) = mpsc::sync_channel::<Box<Framebuffer>>(2);
+    let (return_tx, return_rx) = mpsc::sync_channel::<Box<Framebuffer>>(2);
+    let display_return_tx = return_tx.clone();
 
     // We use a channel to block the main thread until the display is fully initialized
     let (display_ready_tx, display_ready_rx) = mpsc::sync_channel::<()>(1);
@@ -142,6 +144,7 @@ fn main() -> Result<()> {
 
             let _ = display.draw_iter(iter);
             display.flip();
+            let _ = display_return_tx.try_send(framebuffer);
         }
     });
 
@@ -179,6 +182,23 @@ fn main() -> Result<()> {
     // =========================================================================
     // Core 0: The Logic/Async Actor
     // =========================================================================
+
+    let i2c = peripherals.i2c0;
+    let sda = peripherals.pins.gpio16;
+    let scl = peripherals.pins.gpio17;
+    let i2c_config = esp_idf_svc::hal::i2c::I2cConfig::new()
+        .baudrate(esp_idf_svc::hal::units::FromValueType::kHz(400).into());
+    let i2c_driver =
+        esp_idf_svc::hal::i2c::I2cDriver::new(i2c, sda, scl, &i2c_config)
+            .unwrap_or_else(|e| {
+                panic!("CRITICAL: Failed to create I2C driver! {:?}", e)
+            });
+
+    let mut gesture_detector = Some(
+        input::GestureDetector::new(i2c_driver)
+            .unwrap_or_else(|e| panic!("CRITICAL: Failed to initialize LIS3DH Accelerometer! Check I2C address or wiring. {:?}", e))
+    );
+
     // Boost the main task's priority so it preempts background network tasks,
     // avoiding the memory overhead of spawning an extra thread.
     #[allow(
@@ -189,6 +209,9 @@ fn main() -> Result<()> {
         esp_idf_svc::sys::vTaskPrioritySet(std::ptr::null_mut(), 15);
     }
 
+    let _ = return_tx.send(Box::new(Framebuffer::new()));
+    let _ = return_tx.send(Box::new(Framebuffer::new()));
+
     block_on(async {
         info!("Logic Actor started on {:?}", esp_idf_svc::hal::cpu::core());
 
@@ -196,6 +219,7 @@ fn main() -> Result<()> {
             || Box::new(PlasmaApp::new()),
             || Box::new(ParticleApp::new()),
             || Box::new(MtaApp::new()),
+            || Box::new(crate::apps::settings::SettingsApp::new()),
         ]);
 
         let mut is_connected = false;
@@ -208,7 +232,22 @@ fn main() -> Result<()> {
                 app_manager.next_app();
             }
             if btn_down.is_clicked() {
-                app_manager.toggle_settings();
+                app_manager.previous_app();
+            }
+
+            if let Some(gd) = &mut gesture_detector {
+                match gd.poll() {
+                    input::GestureEvent::SwipeRight => app_manager.next_app(),
+                    input::GestureEvent::SwipeLeft => {
+                        app_manager.previous_app()
+                    }
+                    input::GestureEvent::Tilting(tilt) => {
+                        // Smoothly ease the tilt value in AppManager
+                        app_manager.current_tilt =
+                            app_manager.current_tilt * 0.5 + tilt * 0.5;
+                    }
+                    input::GestureEvent::None => {}
+                }
             }
 
             // Check for new credentials from HTTP server
@@ -270,9 +309,13 @@ fn main() -> Result<()> {
             }
             wifi_check_countdown -= 1;
 
-            let mut fb = Box::new(Framebuffer::new());
+            let mut fb = return_rx
+                .try_recv()
+                .unwrap_or_else(|_| Box::new(Framebuffer::new()));
+            fb.clear();
 
-            app_manager.update(16.0, is_connected, ip_str.clone());
+            let accel_data = gesture_detector.as_ref().map(|gd| gd.last_accel);
+            app_manager.update(16.0, is_connected, ip_str.clone(), accel_data);
             app_manager.draw(&mut fb, is_connected);
 
             // Using try_send is inherently safe, it just drops the frame if the receiver is full

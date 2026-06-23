@@ -115,7 +115,7 @@ export function App() {
 
       <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '30px 0' }}></div>
 
-      <form onSubmit={(e) => { e.preventDefault(); savePartialConfig(['brightness'], false); }}>
+      <form onSubmit={(e) => { e.preventDefault(); savePartialConfig(['brightness', 'min_minutes'], false); }}>
         <h2 style={{ fontSize: '1.2rem', marginTop: 0, marginBottom: '16px', color: '#38bdf8' }}>Display</h2>
         <div class="form-group">
           <label htmlFor="brightness">Global Brightness (0-255)</label>
@@ -126,6 +126,19 @@ export function App() {
             max="255"
             value={config.brightness}
             onInput={(e) => setConfig({ ...config, brightness: parseInt((e.target as HTMLInputElement).value) || 0 })}
+            required
+          />
+        </div>
+
+        <div class="form-group">
+          <label htmlFor="minMinutes">Minimum Minutes to Show (0+)</label>
+          <input
+            id="minMinutes"
+            type="number"
+            min="0"
+            max="60"
+            value={config.minMinutes ?? 1}
+            onInput={(e) => setConfig({ ...config, minMinutes: parseInt((e.target as HTMLInputElement).value) || 0 })}
             required
           />
         </div>

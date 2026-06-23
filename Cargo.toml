@@ -38,6 +38,7 @@ embuild = "0.33"
 bindgen = "0.69"
 buffa-build = "0.7"
 protoc-prebuilt = "0.3"
+buffa = "0.7"
 
 [package.metadata.esp-idf-sys]
 extra_components = [{ component_dirs = ["components/hub75_wrapper"], bindings_header = "components/hub75_wrapper/bindings.h", bindings_module = "hub75" }]

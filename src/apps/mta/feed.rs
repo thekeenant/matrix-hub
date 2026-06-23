@@ -227,8 +227,14 @@ fn build_platforms(
             let direction = stop_id.chars().last().unwrap_or('?').to_string();
             trains.sort_by_key(|arr| arr.arrival_time);
 
+            let min_secs =
+                (crate::storage::get_config().min_minutes.unwrap_or(1) * 60)
+                    as u64;
             let trains = trains
                 .into_iter()
+                .filter(|arr| {
+                    arr.arrival_time.saturating_sub(now_secs) >= min_secs
+                })
                 .take(MAX_TRAINS_PER_PLATFORM)
                 .map(|arr| Train {
                     route: arr.route,

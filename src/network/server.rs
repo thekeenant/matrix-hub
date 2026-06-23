@@ -93,6 +93,8 @@ pub fn start_server(
         let update_wifi = update_req.update_mask.contains(&"wifi".to_string());
         let update_brightness =
             update_req.update_mask.contains(&"brightness".to_string());
+        let update_min_minutes =
+            update_req.update_mask.contains(&"min_minutes".to_string());
 
         if let Err(e) = crate::storage::update_config(|config| {
             if update_wifi || update_req.update_mask.is_empty() {
@@ -100,6 +102,9 @@ pub fn start_server(
             }
             if update_brightness || update_req.update_mask.is_empty() {
                 config.brightness = new_config.brightness;
+            }
+            if update_min_minutes || update_req.update_mask.is_empty() {
+                config.min_minutes = new_config.min_minutes;
             }
         }) {
             request

@@ -21,17 +21,17 @@ use crate::fonts::{FONT_5X9, FONT_5X9_BOLD, FONT_6X12, FONT_6X12_BOLD};
 // ============================================================================
 
 const TRAIN_CIRCLE_RADIUS: i32 = 6;
-const TRAIN_CIRCLE_X: i32 = 1;
+pub const TRAIN_CIRCLE_X: i32 = 2; // train circle x position
+const LEFT_TEXT_MARGIN: i32 = 2; // margin between train circle and text
 pub const ROW_HEIGHT: i32 = 16;
 pub const FIRST_ROW_Y: i32 = 11;
-const TIME_SPACING: i32 = 4;
-const CLIP_MARGIN: i32 = 4;
-const CHAR_WIDTH: i32 = 7; // FONT_7X13
-const TIME_CHAR_WIDTH: i32 = 7; // FONT_7X13
+const TIME_SPACING: i32 = 3; // spacing between columns (updated)
 
-// ============================================================================
-// Scroll State
-// ============================================================================
+const RIGHT_MARGIN: i32 = 3; // padding between scrolling text and times
+const TIME_CHAR_WIDTH: i32 = 7; // FONT_7X13
+const CHAR_WIDTH: i32 = 7; // FONT_7X13 (character width for destination text)
+                           // ============================================================================// Scroll State
+                           // ============================================================================
 
 pub const SCROLL_HOLD_START_MS: f32 = 2500.0;
 pub const SCROLL_TIME_PER_PIXEL_MS: f32 = 50.0;
@@ -226,49 +226,112 @@ pub struct ArrivalTime {
     pub has_different_dest: bool,
 }
 
+const COL1_MAX_W: i32 = 3 * TIME_CHAR_WIDTH; // width of first column (e.g. "10m")
+
 fn render_arrival_times(
     fb: &mut Framebuffer,
     y_pos: i32,
     times: &[ArrivalTime],
 ) -> i32 {
-    let style = MonoTextStyle::new(&FONT_7X13, Rgb888::new(0x88, 0x88, 0x88));
+    let big_style =
+        MonoTextStyle::new(&FONT_7X13, Rgb888::new(0x55, 0x55, 0x55));
+    let small_style = MonoTextStyle::new(
+        &embedded_graphics::mono_font::ascii::FONT_5X8,
+        Rgb888::new(0x55, 0x55, 0x55),
+    );
     let display_width = crate::config::WIDTH as i32;
 
-    let total_width: i32 = times
-        .iter()
-        .enumerate()
-        .map(|(i, t)| {
-            let w = t.text.len() as i32 * TIME_CHAR_WIDTH;
-            if i < times.len() - 1 {
-                w + TIME_SPACING
-            } else {
-                w
-            }
-        })
-        .sum();
+    if times.is_empty() {
+        return display_width;
+    }
 
-    let mut x = display_width - total_width;
-    for t in times {
-        let _ = Text::new(&t.text, Point::new(x, y_pos), style).draw(fb);
+    let big_width = |t: &ArrivalTime| t.text.len() as i32 * TIME_CHAR_WIDTH;
+    let small_width = |t: &ArrivalTime| t.text.len() as i32 * 5;
 
-        if t.has_different_dest {
-            // Draw a tiny red superscript '+' in the empty top-right space of the 'm' character
-            let m_x = x + (t.text.len() as i32 - 1) * TIME_CHAR_WIDTH;
-            let cx = m_x + 5; // right side of the 'm' cell
-            let cy = y_pos - 10; // top of the 'm' cell (above the lowercase ascender)
+    // Width of the optional second column (either small stacked or a second big time)
+    let col2_max_w = if times.len() >= 3 {
+        small_width(&times[1]).max(small_width(&times[2]))
+    } else if times.len() == 2 {
+        big_width(&times[1])
+    } else {
+        0
+    };
+
+    // Total width of the whole time block
+    let total_width = if times.len() > 1 {
+        COL1_MAX_W + TIME_SPACING + col2_max_w
+    } else {
+        COL1_MAX_W
+    };
+
+    // Starting X coordinate (right‑aligned block)
+    let x = display_width - total_width;
+
+    // Draw first train right‑aligned in the first column
+    let t0 = &times[0];
+    let t0_w = big_width(t0);
+    let x0 = x + COL1_MAX_W - t0_w;
+    let _ = Text::new(&t0.text, Point::new(x0, y_pos), big_style).draw(fb);
+    if t0.has_different_dest {
+        let cx = x0 + t0_w - TIME_CHAR_WIDTH + 5;
+        let cy = y_pos - 10;
+        let red = Rgb888::new(0xFF, 0x00, 0x00);
+        let _ = Pixel(Point::new(cx, cy - 1), red).draw(fb);
+        let _ = Pixel(Point::new(cx - 1, cy), red).draw(fb);
+        let _ = Pixel(Point::new(cx, cy), red).draw(fb);
+        let _ = Pixel(Point::new(cx + 1, cy), red).draw(fb);
+        let _ = Pixel(Point::new(cx, cy + 1), red).draw(fb);
+    }
+
+    // Starting X for column 2
+    let col2_start = x + COL1_MAX_W + TIME_SPACING;
+
+    if times.len() >= 3 {
+        // Draw 2nd and 3rd trains small, stacked
+        let t1 = &times[1];
+        let t2 = &times[2];
+        let max_small_w = small_width(t1).max(small_width(t2));
+
+        // Top mini train
+        let x1 = col2_start + max_small_w - small_width(t1);
+        let _ = Text::new(&t1.text, Point::new(x1, y_pos - 5), small_style)
+            .draw(fb);
+        if t1.has_different_dest {
+            let cx = x1 + small_width(t1) - 5 + 4;
+            let cy = y_pos - 5 - 6;
+            let _ = Pixel(Point::new(cx, cy), Rgb888::new(0xFF, 0x00, 0x00))
+                .draw(fb);
+        }
+
+        // Bottom mini train
+        let x2 = col2_start + max_small_w - small_width(t2);
+        let _ = Text::new(&t2.text, Point::new(x2, y_pos + 3), small_style)
+            .draw(fb);
+        if t2.has_different_dest {
+            let cx = x2 + small_width(t2) - 5 + 4;
+            let cy = y_pos + 3 - 6;
+            let _ = Pixel(Point::new(cx, cy), Rgb888::new(0xFF, 0x00, 0x00))
+                .draw(fb);
+        }
+    } else if times.len() == 2 {
+        // Draw second train big, right‑aligned in column 2
+        let t1 = &times[1];
+        let t1_w = big_width(t1);
+        let x1 = col2_start + col2_max_w - t1_w;
+        let _ = Text::new(&t1.text, Point::new(x1, y_pos), big_style).draw(fb);
+        if t1.has_different_dest {
+            let cx = x1 + t1_w - TIME_CHAR_WIDTH + 5;
+            let cy = y_pos - 10;
             let red = Rgb888::new(0xFF, 0x00, 0x00);
-
             let _ = Pixel(Point::new(cx, cy - 1), red).draw(fb);
             let _ = Pixel(Point::new(cx - 1, cy), red).draw(fb);
             let _ = Pixel(Point::new(cx, cy), red).draw(fb);
             let _ = Pixel(Point::new(cx + 1, cy), red).draw(fb);
             let _ = Pixel(Point::new(cx, cy + 1), red).draw(fb);
         }
-
-        x += t.text.len() as i32 * TIME_CHAR_WIDTH + TIME_SPACING;
     }
 
-    display_width - total_width
+    x0
 }
 
 fn render_destination(
@@ -279,22 +342,23 @@ fn render_destination(
     clip_right: i32,
     scroll: &ScrollState,
 ) {
+    let style = MonoTextStyle::new(&FONT_7X13, Rgb888::WHITE);
+    let text_width = dest.len() as i32 * CHAR_WIDTH;
+    // Simple available space from circle end to clipping right edge
     let available = (clip_right - circle_end).max(0);
     if available <= 0 {
         return;
     }
-
-    let style = MonoTextStyle::new(&FONT_7X13, Rgb888::WHITE);
-    let text_width = dest.len() as i32 * CHAR_WIDTH;
     let offset = scroll.calculate_offset(text_width, available);
-    let x = circle_end + offset;
+    let x = circle_end + offset; // position text directly after circle
+
     let x_end = x + text_width;
 
     if x_end > circle_end && x < clip_right {
         let mut clipped = ClippedFramebuffer {
             target: fb,
             shape: ClipShape::BoundingBox {
-                left: circle_end,
+                left: circle_end, // clipping left edge at circle
                 right: clip_right,
                 top: y_pos - 10,
                 bottom: y_pos + 3,
@@ -319,8 +383,9 @@ pub fn render_row(
 ) {
     draw_train_circle(fb, route, TRAIN_CIRCLE_X, y_pos);
     let times_start = render_arrival_times(fb, y_pos, times);
-    let circle_end = TRAIN_CIRCLE_X + TRAIN_CIRCLE_RADIUS * 2 + 2;
-    let clip_right = times_start - CLIP_MARGIN;
+    let circle_end =
+        TRAIN_CIRCLE_X + TRAIN_CIRCLE_RADIUS * 2 + LEFT_TEXT_MARGIN;
+    let clip_right = times_start - RIGHT_MARGIN; // enforce fixed right margin
     render_destination(fb, y_pos, dest, circle_end, clip_right, scroll);
 }
 
@@ -353,7 +418,10 @@ pub fn compute_cycle_ms(platforms: &[Platform]) -> f32 {
             let text_w = dest.len() as i32 * CHAR_WIDTH;
             let times_w = 2 * (3 * TIME_CHAR_WIDTH + TIME_SPACING); // estimate "10m 5m"
             let avail = display_width
-                - (TRAIN_CIRCLE_RADIUS * 2 + 2 + CLIP_MARGIN)
+                - (TRAIN_CIRCLE_X
+                    + TRAIN_CIRCLE_RADIUS * 2
+                    + LEFT_TEXT_MARGIN
+                    + RIGHT_MARGIN)
                 - times_w;
             let cycle = ScrollState::cycle_ms_for(text_w, avail);
             if cycle > max {
@@ -404,7 +472,7 @@ pub fn render_station(
                 if let Some(first_train) = platform.trains.first() {
                     let dest =
                         resolve_destination(first_train, &platform.direction);
-                    let times = arrival_times(platform, 2);
+                    let times = arrival_times(platform, 3);
                     let y = FIRST_ROW_Y + i as i32 * ROW_HEIGHT;
                     render_row(fb, y, &first_train.route, dest, &times, scroll);
                 }

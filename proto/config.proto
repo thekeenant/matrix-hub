@@ -14,6 +14,8 @@ message DeviceConfig {
     WifiCredentials wifi = 1;
     // Global LED brightness level (0-255)
     uint32 brightness = 2;
+    // Minimum minutes before a train arrives to show it
+    optional uint32 min_minutes = 3;
 }
 
 // Request to update the device configuration following AIP-134

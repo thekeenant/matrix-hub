@@ -14,6 +14,7 @@ impl DeviceConfig {
                 __buffa_unknown_fields: Default::default(),
             }),
             brightness: 50,
+            min_minutes: Some(1),
             __buffa_unknown_fields: Default::default(),
         }
     }
@@ -68,6 +69,7 @@ fn validate_and_apply_loaded_config(
     let DeviceConfig {
         wifi,
         brightness,
+        min_minutes,
         __buffa_unknown_fields: _,
     } = potentially_invalid_loaded_config;
 
@@ -88,6 +90,10 @@ fn validate_and_apply_loaded_config(
     if brightness != 0 {
         // Enforce max brightness to fit in u8
         config.brightness = brightness.clamp(1, 255);
+    }
+
+    if let Some(m) = min_minutes {
+        config.min_minutes = Some(m);
     }
 
     config

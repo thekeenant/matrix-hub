@@ -25,6 +25,8 @@ export interface DeviceConfig {
     | undefined;
   /** Global LED brightness level (0-255) */
   brightness: number;
+  /** Minimum minutes before a train arrives to show it */
+  minMinutes?: number | undefined;
 }
 
 /** Request to update the device configuration following AIP-134 */
@@ -114,7 +116,7 @@ export const WifiCredentials: MessageFns<WifiCredentials> = {
 };
 
 function createBaseDeviceConfig(): DeviceConfig {
-  return { wifi: undefined, brightness: 0 };
+  return { wifi: undefined, brightness: 0, minMinutes: undefined };
 }
 
 export const DeviceConfig: MessageFns<DeviceConfig> = {
@@ -124,6 +126,9 @@ export const DeviceConfig: MessageFns<DeviceConfig> = {
     }
     if (message.brightness !== 0) {
       writer.uint32(16).uint32(message.brightness);
+    }
+    if (message.minMinutes !== undefined) {
+      writer.uint32(24).uint32(message.minMinutes);
     }
     return writer;
   },
@@ -151,6 +156,14 @@ export const DeviceConfig: MessageFns<DeviceConfig> = {
           message.brightness = reader.uint32();
           continue;
         }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.minMinutes = reader.uint32();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -164,6 +177,11 @@ export const DeviceConfig: MessageFns<DeviceConfig> = {
     return {
       wifi: isSet(object.wifi) ? WifiCredentials.fromJSON(object.wifi) : undefined,
       brightness: isSet(object.brightness) ? globalThis.Number(object.brightness) : 0,
+      minMinutes: isSet(object.minMinutes)
+        ? globalThis.Number(object.minMinutes)
+        : isSet(object.min_minutes)
+        ? globalThis.Number(object.min_minutes)
+        : undefined,
     };
   },
 
@@ -174,6 +192,9 @@ export const DeviceConfig: MessageFns<DeviceConfig> = {
     }
     if (message.brightness !== 0) {
       obj.brightness = Math.round(message.brightness);
+    }
+    if (message.minMinutes !== undefined) {
+      obj.minMinutes = Math.round(message.minMinutes);
     }
     return obj;
   },
@@ -187,6 +208,7 @@ export const DeviceConfig: MessageFns<DeviceConfig> = {
       ? WifiCredentials.fromPartial(object.wifi)
       : undefined;
     message.brightness = object.brightness ?? 0;
+    message.minMinutes = object.minMinutes ?? undefined;
     return message;
   },
 };

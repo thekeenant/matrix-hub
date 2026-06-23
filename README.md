@@ -2,7 +2,7 @@
 
 Matrix Hub is a Rust-based, dual-core embedded application designed for the ESP32 (using ESP-IDF) to drive a HUB75 LED matrix display. It acts as a smart display hub featuring various built-in apps, web-based configuration, and hardware gesture controls.
 
-<video src="https://github.com/thekeenant/matrix-hub/raw/refs/heads/main/assets/demo.mp4" controls="controls" muted="muted" width="100%"></video>
+<video src="https://raw.githubusercontent.com/thekeenant/matrix-hub/main/assets/demo.mp4" controls="controls" muted="muted" width="100%"></video>
 
 
 ## Features

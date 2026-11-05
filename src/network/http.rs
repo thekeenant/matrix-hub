@@ -18,8 +18,8 @@ pub fn fetch_binary(url: &str) -> Result<Vec<u8>> {
 }
 
 fn fetch(url: &str, headers: &[(&str, &str)]) -> Result<Vec<u8>> {
-    use crate::diag::{self, Crumb, Stage};
-    diag::stage(Crumb::WorkerStage, Stage::HttpConnect);
+    use crate::diag::{self, Stage};
+    diag::WORKER.enter(Stage::HttpConnect);
 
     let connection = EspHttpConnection::new(&Configuration {
         use_global_ca_store: true,
@@ -58,7 +58,7 @@ fn fetch(url: &str, headers: &[(&str, &str)]) -> Result<Vec<u8>> {
         .try_reserve_exact(expected_len.unwrap_or(64 * 1024))
         .map_err(|e| anyhow!("Out of memory for response: {e}"))?;
 
-    diag::stage(Crumb::WorkerStage, Stage::HttpRead);
+    diag::WORKER.enter(Stage::HttpRead);
     let mut buf = [0u8; 1024];
     loop {
         // A read error must not be mistaken for end-of-body: that would hand

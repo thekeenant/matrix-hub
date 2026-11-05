@@ -1,23 +1,28 @@
 pub mod manager;
 pub mod mta;
-
 pub mod particles;
 pub mod plasma;
 pub mod settings;
 
 use crate::buffer::Framebuffer;
+use crate::input::Accel;
+use crate::network::NetworkStatus;
 
+/// Everything an app may need to know to advance one frame.
+#[derive(Clone, Copy, Debug)]
+pub struct Frame {
+    /// Time since the previous frame, in milliseconds
+    pub dt_ms: f32,
+    pub network: NetworkStatus,
+    pub accel: Accel,
+}
+
+/// A full-screen app. Only the active app exists: switching apps drops the
+/// old one and constructs the new one.
 pub trait App {
-    /// Update the logic/physics of the app
-    fn update(&mut self, dt_ms: f32);
+    /// Advance state by one frame.
+    fn update(&mut self, frame: &Frame);
 
-    /// Draw the current state directly to the off-screen framebuffer using embedded-graphics
-    fn draw(&self, buffer: &mut Framebuffer);
-
-    /// Optional: Update the network status of the app
-    fn set_network_status(&mut self, _is_connected: bool, _ip: Option<String>) {
-    }
-
-    /// Optional: Provide raw accelerometer data
-    fn set_accelerometer(&mut self, _x: f32, _y: f32, _z: f32) {}
+    /// Draw the current state into a cleared framebuffer.
+    fn draw(&self, fb: &mut Framebuffer);
 }

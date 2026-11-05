@@ -1,141 +1,123 @@
-use crate::apps::App;
+//! Network status screen, including setup instructions when the setup access
+//! point is up.
+
+use crate::apps::{App, Frame};
 use crate::buffer::Framebuffer;
-use crate::config::{HEIGHT, WIDTH};
+use crate::config::{AP_SSID, HEIGHT, WIDTH};
+use crate::network::NetworkStatus;
 use embedded_graphics::mono_font::{ascii::FONT_6X10, MonoTextStyle};
 use embedded_graphics::pixelcolor::Rgb888;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{
-    Line, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, Triangle,
+    Line, PrimitiveStyle, Rectangle, Triangle,
 };
 use embedded_graphics::text::Text;
+use std::net::Ipv4Addr;
+
+/// FONT_6X10 glyph width
+const CHAR_WIDTH: i32 = 6;
+/// Instruction scroll speed, in pixels per unit of `time`
+const SCROLL_SPEED: f32 = 40.0 / 4.8;
+const WARNING_YELLOW: Rgb888 = Rgb888::new(255, 200, 0);
 
 pub struct SettingsApp {
-    pub ip: Option<String>,
+    network: NetworkStatus,
+    /// Animation clock (arbitrary units: 0.005 per ms)
     time: f32,
 }
 
 impl SettingsApp {
     pub const fn new() -> Self {
         Self {
-            ip: None,
+            network: NetworkStatus::Connecting,
             time: 0.0,
         }
+    }
+
+    fn draw_setup_instructions(&self, fb: &mut Framebuffer, ip: Ipv4Addr) {
+        let instruction = format!("Join WiFi '{AP_SSID}' then visit {ip}");
+        let text_width = instruction.len() as i32 * CHAR_WIDTH;
+        let width = WIDTH as i32;
+        let total_scroll = text_width + width - 20;
+        let offset = width - ((self.time * SCROLL_SPEED) as i32 % total_scroll);
+        let _ = Text::new(
+            &instruction,
+            Point::new(offset, 19),
+            MonoTextStyle::new(&FONT_6X10, Rgb888::CYAN),
+        )
+        .draw(fb);
+
+        // Mask the text where it scrolls under the warning icon (left) and
+        // the border (right)
+        let black = PrimitiveStyle::with_fill(Rgb888::BLACK);
+        let _ = Rectangle::new(Point::new(1, 1), Size::new(21, HEIGHT - 2))
+            .into_styled(black)
+            .draw(fb);
+        let _ =
+            Rectangle::new(Point::new(width - 2, 1), Size::new(1, HEIGHT - 2))
+                .into_styled(black)
+                .draw(fb);
+
+        // Warning triangle with an exclamation mark
+        let stroke = PrimitiveStyle::with_stroke(WARNING_YELLOW, 1);
+        let _ = Triangle::new(
+            Point::new(10, 10),
+            Point::new(4, 20),
+            Point::new(16, 20),
+        )
+        .into_styled(stroke)
+        .draw(fb);
+        let _ = Line::new(Point::new(10, 13), Point::new(10, 16))
+            .into_styled(stroke)
+            .draw(fb);
+        let _ = Pixel(Point::new(10, 18), WARNING_YELLOW).draw(fb);
+    }
+
+    fn draw_two_lines(fb: &mut Framebuffer, title: &str, detail: &str) {
+        let _ = Text::new(
+            title,
+            Point::new(4, 12),
+            MonoTextStyle::new(&FONT_6X10, Rgb888::WHITE),
+        )
+        .draw(fb);
+        let _ = Text::new(
+            detail,
+            Point::new(4, 26),
+            MonoTextStyle::new(&FONT_6X10, Rgb888::CYAN),
+        )
+        .draw(fb);
     }
 }
 
 impl App for SettingsApp {
-    fn update(&mut self, dt_ms: f32) {
-        self.time += dt_ms * 0.005;
+    fn update(&mut self, frame: &Frame) {
+        self.network = frame.network;
+        self.time += frame.dt_ms * 0.005;
     }
 
-    fn set_network_status(&mut self, _is_connected: bool, ip: Option<String>) {
-        self.ip = ip;
-    }
-
-    fn draw(&self, buffer: &mut Framebuffer) {
+    fn draw(&self, fb: &mut Framebuffer) {
         let pulse = (self.time * 2.0).sin().mul_add(50.0, 50.0) as u8;
 
-        let is_ap = self.ip.as_ref().is_some_and(|s| s.starts_with("AP:"));
-        let is_connected = self.ip.is_some() && !is_ap;
-
-        let border_color = if is_connected {
-            Rgb888::new(0, pulse, 0) // Pulsing green
-        } else if is_ap {
-            Rgb888::new(pulse, 0, 0) // Pulsing red
-        } else {
-            Rgb888::new(pulse, pulse / 2, 0) // Pulsing orange
+        let border_color = match self.network {
+            NetworkStatus::Connected(ip) => {
+                Self::draw_two_lines(fb, "WiFi Connected", &ip.to_string());
+                Rgb888::new(0, pulse, 0) // pulsing green
+            }
+            NetworkStatus::SetupAccessPoint(ip) => {
+                self.draw_setup_instructions(fb, ip);
+                Rgb888::new(pulse, 0, 0) // pulsing red
+            }
+            NetworkStatus::Connecting => {
+                let dots = (self.time * 2.0) as usize % 4;
+                let status = format!("Connecting{}", ".".repeat(dots));
+                Self::draw_two_lines(fb, "WiFi Setup", &status);
+                Rgb888::new(pulse, pulse / 2, 0) // pulsing orange
+            }
         };
 
-        buffer.clear();
-
-        let text_style = MonoTextStyle::new(&FONT_6X10, Rgb888::WHITE);
-        let sub_style = MonoTextStyle::new(&FONT_6X10, Rgb888::CYAN);
-
-        if is_ap {
-            // Scrolling instruction text
-            let instruction = format!(
-                "Join WiFi 'Matrix-Hub' then visit {}",
-                self.ip.as_deref().unwrap_or("").replace("AP: ", "")
-            );
-            let text_width = (instruction.len() * 6) as i32;
-            let speed = 40.0 / 4.8; // Target ~40 pixels per real-life second
-            let width = WIDTH as i32;
-            let total_scroll = text_width + width - 20;
-            let offset = width - ((self.time * speed) as i32 % total_scroll);
-
-            // Draw text
-            let _ = Text::new(
-                &instruction,
-                Point::new(offset, 19),
-                MonoTextStyle::new(&FONT_6X10, Rgb888::CYAN),
-            )
-            .draw(buffer);
-
-            // Draw a black rectangle on the left to hide text scrolling behind the warning icon
-            let _ = Rectangle::new(Point::new(1, 1), Size::new(21, HEIGHT - 2))
-                .into_styled(
-                    PrimitiveStyleBuilder::new()
-                        .fill_color(Rgb888::BLACK)
-                        .build(),
-                )
-                .draw(buffer);
-
-            // Draw a 1px black column on the right so text doesn't overlap the right border before it's drawn
-            let _ = Rectangle::new(
-                Point::new(WIDTH as i32 - 2, 1),
-                Size::new(1, HEIGHT - 2),
-            )
-            .into_styled(
-                PrimitiveStyleBuilder::new()
-                    .fill_color(Rgb888::BLACK)
-                    .build(),
-            )
-            .draw(buffer);
-
-            // Draw Warning Triangle over the black background
-            let warning_color = Rgb888::new(255, 200, 0); // Yellow
-            let _ = Triangle::new(
-                Point::new(10, 10),
-                Point::new(4, 20),
-                Point::new(16, 20),
-            )
-            .into_styled(PrimitiveStyle::with_stroke(warning_color, 1))
-            .draw(buffer);
-            let _ = Line::new(Point::new(10, 13), Point::new(10, 16))
-                .into_styled(PrimitiveStyle::with_stroke(warning_color, 1))
-                .draw(buffer);
-            let _ = Pixel(Point::new(10, 18), warning_color).draw(buffer);
-        } else if is_connected {
-            // Connected Mode
-            let _ = Text::new("WiFi Connected", Point::new(4, 12), text_style)
-                .draw(buffer);
-            let _ = Text::new(
-                self.ip.as_deref().unwrap_or(""),
-                Point::new(4, 26),
-                sub_style,
-            )
-            .draw(buffer);
-        } else {
-            // Connecting Mode
-            let _ = Text::new("WiFi Setup", Point::new(4, 12), text_style)
-                .draw(buffer);
-            let dots = match (self.time * 2.0) as i32 % 4 {
-                0 => "Connecting",
-                1 => "Connecting.",
-                2 => "Connecting..",
-                _ => "Connecting...",
-            };
-            let _ = Text::new(dots, Point::new(4, 26), sub_style).draw(buffer);
-        }
-
-        // Draw the 1-pixel pulsing border LAST so it sits on top of everything
-        let style = PrimitiveStyleBuilder::new()
-            .stroke_color(border_color)
-            .stroke_width(1)
-            .build();
-
+        // Pulsing 1px border, drawn last so it sits on top
         let _ = Rectangle::new(Point::zero(), Size::new(WIDTH, HEIGHT))
-            .into_styled(style)
-            .draw(buffer);
+            .into_styled(PrimitiveStyle::with_stroke(border_color, 1))
+            .draw(fb);
     }
 }

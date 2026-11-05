@@ -12,7 +12,7 @@ const MAX_CONFIG_BODY_BYTES: usize = 1024;
 const MAX_MIN_MINUTES: u32 = 60;
 
 pub fn start_server(
-    credentials_tx: std::sync::mpsc::Sender<(String, String)>,
+    credentials_tx: std::sync::mpsc::Sender<()>,
 ) -> Result<EspHttpServer<'static>> {
     let config = Configuration {
         uri_match_wildcard: true,
@@ -153,10 +153,7 @@ pub fn start_server(
         // If WiFi was updated, tell the main loop to reconnect
         if update_wifi {
             info!("WiFi credentials updated. Sending update event...");
-            let _ = credentials_tx.send((
-                new_config.wifi.ssid.clone(),
-                new_config.wifi.pass.clone(),
-            ));
+            let _ = credentials_tx.send(());
         }
 
         request.into_ok_response()?.write_all(b"OK")?;
@@ -181,7 +178,7 @@ pub fn start_server(
     // Diagnostics: raw coredump image from flash (decode with
     // scripts/decode-coredump.sh). 404 if there is none.
     server.fn_handler("/api/coredump", Method::Get, |request| {
-        let Some((addr, size)) = crate::diag::coredump_location() else {
+        let Some((addr, size)) = crate::platform::coredump::location() else {
             request
                 .into_status_response(404)?
                 .write_all(b"No coredump")?;
@@ -201,7 +198,7 @@ pub fn start_server(
         let mut offset = 0;
         while offset < size {
             let n = buf.len().min(size - offset);
-            crate::diag::read_flash(addr + offset, &mut buf[..n])?;
+            crate::platform::coredump::read(addr + offset, &mut buf[..n])?;
             response.write_all(&buf[..n])?;
             offset += n;
         }
@@ -209,7 +206,7 @@ pub fn start_server(
     })?;
 
     server.fn_handler("/api/coredump", Method::Delete, |request| {
-        crate::diag::erase_coredump()?;
+        crate::platform::coredump::erase()?;
         request.into_ok_response()?.write_all(b"Erased")?;
         Ok::<(), anyhow::Error>(())
     })?;

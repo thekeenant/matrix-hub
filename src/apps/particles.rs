@@ -1,4 +1,4 @@
-use crate::apps::App;
+use crate::apps::{App, Frame};
 use crate::buffer::Framebuffer;
 use crate::config::{HEIGHT, WIDTH};
 
@@ -54,14 +54,12 @@ impl ParticleApp {
 }
 
 impl App for ParticleApp {
-    fn set_accelerometer(&mut self, x: f32, y: f32, _z: f32) {
-        // Positive X tilt = Left side up (so particles should roll left, negative vx)
-        self.gravity_x = -x * 0.25;
-        // Add raw Y tilt to default gravity
-        self.gravity_y = y * 0.25 + 0.08;
-    }
+    fn update(&mut self, frame: &Frame) {
+        // Gravity follows the device's tilt. Positive x is a tilt to the left,
+        // so particles roll left; y adds to a constant downward pull.
+        self.gravity_x = -frame.accel.x * 0.25;
+        self.gravity_y = frame.accel.y * 0.25 + 0.08;
 
-    fn update(&mut self, _dt_ms: f32) {
         let mut rng = rand::thread_rng();
 
         for p in &mut self.particles {

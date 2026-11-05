@@ -12,7 +12,7 @@ pub mod stops {
     include!(concat!(env!("OUT_DIR"), "/stops.rs"));
 }
 
-use crate::apps::App;
+use crate::apps::{App, Frame};
 use crate::buffer::Framebuffer;
 use crate::network::http;
 use crate::task::TimerTask;
@@ -88,8 +88,8 @@ pub struct MtaApp {
     current_idx: usize,
     scroll_elapsed_ms: f32,
     scroll_cycle_ms: f32,
-    time_ms: f32, // for spinner animation
-    is_connected: bool,
+    /// Time since the app was opened
+    time_ms: f32,
 }
 
 impl MtaApp {
@@ -113,7 +113,6 @@ impl MtaApp {
             scroll_elapsed_ms: 0.0,
             scroll_cycle_ms: MIN_STATION_DISPLAY_MS,
             time_ms: 0.0,
-            is_connected: false,
         }
     }
 
@@ -144,17 +143,14 @@ impl MtaApp {
 }
 
 impl App for MtaApp {
-    fn set_network_status(&mut self, is_connected: bool, _ip: Option<String>) {
-        self.is_connected = is_connected;
-    }
+    fn update(&mut self, frame: &Frame) {
+        self.time_ms += frame.dt_ms;
 
-    fn update(&mut self, dt_ms: f32) {
-        self.time_ms += dt_ms;
-
-        // Delay network fetch by 250ms and WAIT for WiFi connection
+        // Start fetching once WiFi is up (and the app has been open briefly,
+        // so quickly swiping past it doesn't start a fetch)
         if self.fetch_task.is_none()
             && self.time_ms > 250.0
-            && self.is_connected
+            && frame.network.is_connected()
         {
             let shared = self.shared_stations.clone();
             let mut failures = vec![0u32; STATION_CONFIGS.len()];
@@ -179,7 +175,7 @@ impl App for MtaApp {
             self.recalculate_cycle();
         }
 
-        self.advance_scroll(dt_ms);
+        self.advance_scroll(frame.dt_ms);
     }
 
     fn draw(&self, fb: &mut Framebuffer) {
@@ -212,7 +208,7 @@ fn fetch_all_stations(
 
         diag::inc(Crumb::FetchStarted);
         let started_ms = diag::uptime_ms();
-        diag::stage(Crumb::WorkerStage, Stage::HttpConnect);
+        diag::WORKER.enter(Stage::HttpConnect);
         diag::maybe_test_hang_worker();
 
         let station = match http::fetch_binary(feed_url) {
@@ -222,7 +218,7 @@ fn fetch_all_stations(
                 diag::set(Crumb::LastFetchBytes, data.len() as u32);
                 diag::set_max(Crumb::MaxFetchBytes, data.len() as u32);
 
-                diag::stage(Crumb::WorkerStage, Stage::Parse);
+                diag::WORKER.enter(Stage::Parse);
                 let st = feed::process_station(
                     data.as_slice(),
                     config.route,
@@ -253,7 +249,7 @@ fn fetch_all_stations(
         diag::set(Crumb::LastFetchMs, (diag::uptime_ms() - started_ms) as u32);
         diag::set(Crumb::LastFetchEndS, diag::uptime_s());
 
-        diag::stage(Crumb::WorkerStage, Stage::Publish);
+        diag::WORKER.enter(Stage::Publish);
         if let Some(station) = station {
             if let Ok(mut guard) = shared.lock() {
                 guard.1[idx] = station;
@@ -262,5 +258,5 @@ fn fetch_all_stations(
         }
     }
 
-    diag::stage(Crumb::WorkerStage, Stage::WorkerSleep);
+    diag::WORKER.enter(Stage::WorkerSleep);
 }

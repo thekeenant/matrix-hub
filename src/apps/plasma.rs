@@ -1,4 +1,4 @@
-use crate::apps::App;
+use crate::apps::{App, Frame};
 use crate::buffer::Framebuffer;
 use crate::config::{HEIGHT, WIDTH};
 use core::f32::consts::PI;
@@ -15,9 +15,9 @@ impl PlasmaApp {
 }
 
 impl App for PlasmaApp {
-    fn update(&mut self, dt_ms: f32) {
+    fn update(&mut self, frame: &Frame) {
         // Slowly advance time based on delta time
-        self.time += dt_ms * 0.005;
+        self.time += frame.dt_ms * 0.005;
     }
 
     fn draw(&self, buffer: &mut Framebuffer) {

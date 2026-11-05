@@ -3,7 +3,7 @@ use anyhow::{anyhow, Result};
 use buffa::Message;
 use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs};
 use log::error;
-use std::sync::{OnceLock, RwLock};
+use std::sync::{OnceLock, PoisonError, RwLock};
 
 impl DeviceConfig {
     pub fn default_config() -> Self {
@@ -25,11 +25,20 @@ pub fn global_config() -> &'static RwLock<DeviceConfig> {
     CONFIG.get_or_init(|| RwLock::new(DeviceConfig::default_config()))
 }
 
+/// Run `f` with read access to the current config, without cloning it.
+pub fn with_config<R>(f: impl FnOnce(&DeviceConfig) -> R) -> R {
+    f(&global_config()
+        .read()
+        .unwrap_or_else(PoisonError::into_inner))
+}
+
 pub fn get_config() -> DeviceConfig {
-    match global_config().read() {
-        Ok(guard) => guard.clone(),
-        Err(poisoned) => poisoned.into_inner().clone(),
-    }
+    with_config(DeviceConfig::clone)
+}
+
+/// Display brightness (stored as u32, validated to 1-255).
+pub fn brightness() -> u8 {
+    with_config(|c| u8::try_from(c.brightness).unwrap_or(u8::MAX))
 }
 
 pub fn global_nvs() -> &'static OnceLock<EspDefaultNvsPartition> {

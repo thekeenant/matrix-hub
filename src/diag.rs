@@ -3,138 +3,114 @@
 //! - **Breadcrumbs**: counters plus a "what is this thread doing right now"
 //!   stage marker per thread. They live in `.noinit` RAM, so they survive the
 //!   watchdog reboot and the *previous* boot's values can be read afterwards.
-//! - **Watchdog**: helpers to subscribe a thread to the ESP-IDF task watchdog
-//!   (configured to panic + coredump + reboot in `sdkconfig.defaults`).
-//! - **Snapshot**: a JSON report served at `/api/debug` (heap, task list,
-//!   breadcrumbs, previous boot, coredump summary).
-//! - **Coredump**: raw access to the coredump partition for `/api/coredump`.
+//! - **Hang detection**: the main loop and display thread are watched by the
+//!   ESP-IDF task watchdog; the background worker by a stuck-stage check.
+//!   Either way the device panics (saving a coredump) and reboots.
+//! - **Report**: a JSON snapshot served at `/api/debug`.
 
-use esp_idf_svc::sys;
 use log::{info, warn};
-use serde_json::{json, Value};
-use std::sync::atomic::{AtomicU32, Ordering};
+use serde::Serialize;
+use serde_json::{Map, Value};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::OnceLock;
+use std::time::Duration;
+
+use crate::platform::{self, coredump, HeapStats, TaskInfo};
+use crate::util::named_enum;
 
 // ============================================================================
 // Breadcrumbs
 // ============================================================================
 
-/// One slot per breadcrumb. Order must match `CRUMB_NAMES`.
-#[derive(Clone, Copy)]
-pub enum Crumb {
-    BootCount,
-    UptimeS,
-    MainFrames,
-    MainStage,
-    DisplayFrames,
-    DisplayStage,
-    WorkerStage,
-    /// Uptime (s) when `WorkerStage` last changed
-    WorkerStageSinceS,
-    FetchStarted,
-    FetchOk,
-    FetchErr,
-    LastFetchBytes,
-    MaxFetchBytes,
-    LastFetchMs,
-    LastFetchEndS,
-    WifiConnected,
-    WifiReconnects,
-    MinFreeInternal,
-    MinLargestInternal,
-    MinFreePsram,
-    MinLargestPsram,
+named_enum! {
+    /// One `.noinit` slot per breadcrumb.
+    pub enum Crumb {
+        BootCount => "boot_count",
+        UptimeS => "uptime_s",
+        MainFrames => "main_frames",
+        MainStage => "main_stage",
+        DisplayFrames => "display_frames",
+        DisplayStage => "display_stage",
+        WorkerStage => "worker_stage",
+        /// Uptime (s) when `WorkerStage` last changed
+        WorkerStageSinceS => "worker_stage_since_s",
+        FetchStarted => "fetch_started",
+        FetchOk => "fetch_ok",
+        FetchErr => "fetch_err",
+        LastFetchBytes => "last_fetch_bytes",
+        MaxFetchBytes => "max_fetch_bytes",
+        LastFetchMs => "last_fetch_ms",
+        LastFetchEndS => "last_fetch_end_s",
+        WifiConnected => "wifi_connected",
+        WifiReconnects => "wifi_reconnects",
+        MinFreeInternal => "min_free_internal",
+        MinLargestInternal => "min_largest_internal",
+        MinFreePsram => "min_free_psram",
+        MinLargestPsram => "min_largest_psram",
+    }
 }
 
-const CRUMB_COUNT: usize = 21;
-
-const CRUMB_NAMES: [&str; CRUMB_COUNT] = [
-    "boot_count",
-    "uptime_s",
-    "main_frames",
-    "main_stage",
-    "display_frames",
-    "display_stage",
-    "worker_stage",
-    "worker_stage_since_s",
-    "fetch_started",
-    "fetch_ok",
-    "fetch_err",
-    "last_fetch_bytes",
-    "max_fetch_bytes",
-    "last_fetch_ms",
-    "last_fetch_end_s",
-    "wifi_connected",
-    "wifi_reconnects",
-    "min_free_internal",
-    "min_largest_internal",
-    "min_free_psram",
-    "min_largest_psram",
-];
-
-/// Crumbs whose value is a `Stage` and should be rendered by name.
-const STAGE_CRUMBS: [usize; 3] = [
-    Crumb::MainStage as usize,
-    Crumb::DisplayStage as usize,
-    Crumb::WorkerStage as usize,
-];
-
-/// Where a thread currently is. Order must match `STAGE_NAMES`.
-#[derive(Clone, Copy)]
-pub enum Stage {
-    Boot,
-    // Main loop
-    Input,
-    Gesture,
-    WifiCheck,
-    WifiReconnect,
-    Update,
-    Draw,
-    Send,
-    Sleep,
-    // Display thread
-    DisplayWait,
-    DisplayBrightness,
-    DisplayClear,
-    DisplayDraw,
-    DisplayFlip,
-    // Background worker
-    WorkerSleep,
-    HttpConnect,
-    HttpRead,
-    Parse,
-    Publish,
+named_enum! {
+    /// Where a thread currently is.
+    pub enum Stage {
+        Boot => "boot",
+        // Main loop
+        Input => "input",
+        WifiCheck => "wifi_check",
+        WifiReconnect => "wifi_reconnect",
+        Update => "update",
+        Draw => "draw",
+        Send => "send",
+        Sleep => "sleep",
+        // Display thread
+        DisplayWait => "display_wait",
+        DisplayBrightness => "display_brightness",
+        DisplayClear => "display_clear",
+        DisplayDraw => "display_draw",
+        DisplayFlip => "display_flip",
+        // Background worker
+        WorkerSleep => "worker_sleep",
+        HttpConnect => "http_connect",
+        HttpRead => "http_read",
+        Parse => "parse",
+        Publish => "publish",
+    }
 }
 
-const STAGE_NAMES: [&str; 19] = [
-    "boot",
-    "input",
-    "gesture",
-    "wifi_check",
-    "wifi_reconnect",
-    "update",
-    "draw",
-    "send",
-    "sleep",
-    "display_wait",
-    "display_brightness",
-    "display_clear",
-    "display_draw",
-    "display_flip",
-    "worker_sleep",
-    "http_connect",
-    "http_read",
-    "parse",
-    "publish",
-];
+impl Crumb {
+    /// Crumbs whose value is a `Stage`, reported by name
+    const fn is_stage(self) -> bool {
+        matches!(
+            self,
+            Self::MainStage | Self::DisplayStage | Self::WorkerStage
+        )
+    }
+}
+
+/// Records which stage one thread is in. Use the `MAIN`, `DISPLAY` and
+/// `WORKER` instances: `diag::MAIN.enter(Stage::Draw)`.
+pub struct StageTracker(Crumb);
+
+pub const MAIN: StageTracker = StageTracker(Crumb::MainStage);
+pub const DISPLAY: StageTracker = StageTracker(Crumb::DisplayStage);
+pub const WORKER: StageTracker = StageTracker(Crumb::WorkerStage);
+
+impl StageTracker {
+    pub fn enter(&self, stage: Stage) {
+        if self.0 == Crumb::WorkerStage {
+            set(Crumb::WorkerStageSinceS, uptime_s());
+        }
+        set(self.0, stage as u32);
+    }
+}
 
 /// Marks the `.noinit` crumbs as valid. Includes the crumb count so a
 /// firmware with a different layout doesn't misread the previous one's.
-const MAGIC: u32 = 0xD1A6_0000 | CRUMB_COUNT as u32;
+const MAGIC: u32 = 0xD1A6_0000 | Crumb::COUNT as u32;
 
 /// A worker stuck mid-fetch this long is considered hung. Fetches normally
-/// take a few seconds, and ESP-IDF's HTTP client times out individual
-/// operations after 5s, so this only trips on a genuine hang.
+/// take a few seconds, and the HTTP client times out individual operations
+/// after 10s, so this only trips on a genuine hang.
 const WORKER_STUCK_S: u32 = 300;
 
 #[allow(
@@ -153,7 +129,7 @@ const ZERO: AtomicU32 = AtomicU32::new(0);
     reason = "link_section places breadcrumbs in RAM that survives soft resets"
 )]
 #[link_section = ".noinit.diag"]
-static CRUMBS: [AtomicU32; CRUMB_COUNT + 1] = [ZERO; CRUMB_COUNT + 1];
+static CRUMBS: [AtomicU32; Crumb::COUNT + 1] = [ZERO; Crumb::COUNT + 1];
 
 fn slot(c: Crumb) -> &'static AtomicU32 {
     &CRUMBS[c as usize + 1]
@@ -175,56 +151,46 @@ pub fn inc(c: Crumb) {
 // enough. (Also: `fetch_max`/`fetch_min` hit an "Undefined temporary symbol"
 // assembler bug in the Xtensa LLVM backend.)
 pub fn set_max(c: Crumb, v: u32) {
-    if v > slot(c).load(Ordering::Relaxed) {
-        slot(c).store(v, Ordering::Relaxed);
+    if v > get(c) {
+        set(c, v);
     }
 }
 
-pub fn set_min(c: Crumb, v: u32) {
-    if v < slot(c).load(Ordering::Relaxed) {
-        slot(c).store(v, Ordering::Relaxed);
+fn set_min(c: Crumb, v: u32) {
+    if v < get(c) {
+        set(c, v);
     }
 }
 
-pub fn stage(c: Crumb, s: Stage) {
-    if matches!(c, Crumb::WorkerStage) {
-        set(Crumb::WorkerStageSinceS, uptime_s());
-    }
-    set(c, s as u32);
+type CrumbValues = [u32; Crumb::COUNT];
+
+fn snapshot_crumbs() -> CrumbValues {
+    core::array::from_fn(|i| get(Crumb::ALL[i]))
 }
 
 struct PrevBoot {
-    reset_reason: u32,
-    /// `None` if the noinit RAM didn't hold valid crumbs (e.g. power-on).
-    crumbs: Option<[u32; CRUMB_COUNT]>,
+    reset_reason: &'static str,
+    /// `None` if the noinit RAM didn't hold valid crumbs (e.g. power-on)
+    crumbs: Option<CrumbValues>,
 }
 
 static PREV_BOOT: OnceLock<PrevBoot> = OnceLock::new();
 
-fn snapshot_crumbs() -> [u32; CRUMB_COUNT] {
-    let mut out = [0u32; CRUMB_COUNT];
-    for (i, v) in out.iter_mut().enumerate() {
-        *v = CRUMBS[i + 1].load(Ordering::Relaxed);
-    }
-    out
-}
-
 /// Call once, first thing in `main`. Captures the previous boot's
 /// breadcrumbs (if any survived) and resets them for this boot.
 pub fn init_boot() {
-    #[allow(unsafe_code, reason = "ESP-IDF FFI")]
-    let reason = unsafe { sys::esp_reset_reason() } as u32;
+    let reset_reason = platform::reset_reason();
 
-    let valid = CRUMBS[0].load(Ordering::Relaxed) == MAGIC;
-    let prev = valid.then(snapshot_crumbs);
+    let prev =
+        (CRUMBS[0].load(Ordering::Relaxed) == MAGIC).then(snapshot_crumbs);
     let boots = prev.map_or(1, |p| p[Crumb::BootCount as usize] + 1);
 
     for c in &CRUMBS {
         c.store(0, Ordering::Relaxed);
     }
     set(Crumb::BootCount, boots);
-    for c in [Crumb::MainStage, Crumb::DisplayStage, Crumb::WorkerStage] {
-        stage(c, Stage::Boot);
+    for tracker in [MAIN, DISPLAY, WORKER] {
+        tracker.enter(Stage::Boot);
     }
     for c in [
         Crumb::MinFreeInternal,
@@ -236,20 +202,23 @@ pub fn init_boot() {
     }
     CRUMBS[0].store(MAGIC, Ordering::Relaxed);
 
-    info!(
-        "diag: boot #{boots}, reset reason {}",
-        reset_reason_name(reason)
-    );
+    info!("diag: boot #{boots}, reset reason {reset_reason}");
     if let Some(p) = &prev {
         info!("diag: previous boot crumbs: {}", crumbs_json(p));
     }
-
     let _ = PREV_BOOT.set(PrevBoot {
-        reset_reason: reason,
+        reset_reason,
         crumbs: prev,
     });
 
-    init_coredump();
+    // The coredump partition may hold leftover bytes from an older partition
+    // layout. Erase non-dumps once so "is there a dump?" checks are reliable.
+    if let Some((_, size)) = coredump::location() {
+        warn!("diag: coredump from a previous crash is stored ({size} bytes), fetch it from /api/coredump");
+    } else if coredump::holds_garbage() {
+        warn!("diag: coredump partition holds invalid data, erasing");
+        let _ = coredump::erase();
+    }
 }
 
 /// Call about once per second from the main loop: tracks uptime and heap
@@ -258,7 +227,7 @@ pub fn tick_1s() {
     check_worker();
 
     set(Crumb::UptimeS, uptime_s());
-    let h = heap_stats();
+    let h = platform::heap_stats();
     set_min(Crumb::MinFreeInternal, h.internal_free);
     set_min(Crumb::MinLargestInternal, h.internal_largest);
     set_min(Crumb::MinFreePsram, h.psram_free);
@@ -270,20 +239,17 @@ pub fn tick_1s() {
 /// instead check that it never sits in one mid-fetch stage for too long. If
 /// it does, panic to get a coredump of where it's stuck, then reboot.
 fn check_worker() {
-    let stage = get(Crumb::WorkerStage);
-    let idle =
-        stage == Stage::Boot as u32 || stage == Stage::WorkerSleep as u32;
+    let stage = Stage::from_index(get(Crumb::WorkerStage));
+    let idle = matches!(stage, Some(Stage::Boot | Stage::WorkerSleep));
     let stuck_for = uptime_s().saturating_sub(get(Crumb::WorkerStageSinceS));
     if !idle && stuck_for > WORKER_STUCK_S {
-        let name = STAGE_NAMES.get(stage as usize).copied().unwrap_or("?");
+        let name = stage.map_or("?", Stage::name);
         panic!("diag: background worker stuck in '{name}' for {stuck_for}s");
     }
 }
 
 pub fn uptime_ms() -> u64 {
-    #[allow(unsafe_code, reason = "ESP-IDF FFI")]
-    let us = unsafe { sys::esp_timer_get_time() };
-    (us / 1000) as u64
+    platform::uptime_ms()
 }
 
 pub fn uptime_s() -> u32 {
@@ -291,285 +257,112 @@ pub fn uptime_s() -> u32 {
 }
 
 // ============================================================================
-// Task watchdog
+// Watchdog
+// ============================================================================
+
+/// Subscribe the calling thread to the task watchdog: it must call
+/// [`feed_watchdog`] at least every `CONFIG_ESP_TASK_WDT_TIMEOUT_S` seconds
+/// or the device panics, writes a coredump, and reboots.
+pub fn watch_current_thread() {
+    if let Err(e) = platform::subscribe_to_watchdog() {
+        warn!("diag: failed to subscribe to task watchdog: {e}");
+    }
+}
+
+pub use platform::feed_watchdog;
+
+// ============================================================================
+// Test hangs
 // ============================================================================
 
 /// Set via `POST /api/debug/test-hang` to deliberately wedge the main loop,
 /// to verify the watchdog -> coredump -> reboot pipeline end to end.
-pub static TEST_HANG: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+pub static TEST_HANG: AtomicBool = AtomicBool::new(false);
 
 /// Set via `POST /api/debug/test-hang-worker` to wedge the background
 /// worker mid-fetch, to verify the worker hang guard (~5 min).
-pub static TEST_HANG_WORKER: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+pub static TEST_HANG_WORKER: AtomicBool = AtomicBool::new(false);
 
-/// Called from the main loop. Never returns if a test hang was requested.
+/// Never returns if a test hang of the main loop was requested.
 pub fn maybe_test_hang() {
     hang_if_requested(&TEST_HANG, "main loop");
 }
 
-/// Called from the background worker. Never returns if a test hang was
-/// requested.
+/// Never returns if a test hang of the background worker was requested.
 pub fn maybe_test_hang_worker() {
     hang_if_requested(&TEST_HANG_WORKER, "background worker");
 }
 
-fn hang_if_requested(flag: &std::sync::atomic::AtomicBool, what: &str) {
+fn hang_if_requested(flag: &AtomicBool, what: &str) {
     if flag.load(Ordering::Relaxed) {
         warn!("diag: test hang requested, blocking {what} forever");
         loop {
-            std::thread::sleep(std::time::Duration::from_secs(1));
-        }
-    }
-}
-
-/// Subscribe the calling thread to the task watchdog. From now on it must
-/// call `wdt_feed` at least every `CONFIG_ESP_TASK_WDT_TIMEOUT_S` seconds or
-/// the device panics, writes a coredump, and reboots.
-pub fn wdt_subscribe_current() {
-    #[allow(unsafe_code, reason = "ESP-IDF FFI")]
-    let err = unsafe { sys::esp_task_wdt_add(core::ptr::null_mut()) };
-    if err != sys::ESP_OK {
-        warn!("diag: esp_task_wdt_add failed: {err}");
-    }
-}
-
-pub fn wdt_feed() {
-    #[allow(unsafe_code, reason = "ESP-IDF FFI")]
-    unsafe {
-        sys::esp_task_wdt_reset();
-    }
-}
-
-// ============================================================================
-// Heap
-// ============================================================================
-
-struct HeapStats {
-    internal_free: u32,
-    internal_largest: u32,
-    internal_min_ever: u32,
-    psram_free: u32,
-    psram_largest: u32,
-    psram_min_ever: u32,
-}
-
-fn heap_stats() -> HeapStats {
-    let internal = sys::MALLOC_CAP_INTERNAL | sys::MALLOC_CAP_8BIT;
-    let psram = sys::MALLOC_CAP_SPIRAM;
-    #[allow(unsafe_code, reason = "ESP-IDF FFI")]
-    unsafe {
-        HeapStats {
-            internal_free: sys::heap_caps_get_free_size(internal) as u32,
-            internal_largest: sys::heap_caps_get_largest_free_block(internal)
-                as u32,
-            internal_min_ever: sys::heap_caps_get_minimum_free_size(internal)
-                as u32,
-            psram_free: sys::heap_caps_get_free_size(psram) as u32,
-            psram_largest: sys::heap_caps_get_largest_free_block(psram) as u32,
-            psram_min_ever: sys::heap_caps_get_minimum_free_size(psram) as u32,
+            std::thread::sleep(Duration::from_secs(1));
         }
     }
 }
 
 // ============================================================================
-// Tasks
+// Report
 // ============================================================================
 
-fn task_list() -> (Vec<Value>, u64) {
-    #[allow(unsafe_code, reason = "ESP-IDF FFI")]
-    unsafe {
-        // Headroom in case tasks are created between the two calls
-        let capacity = sys::uxTaskGetNumberOfTasks() as usize + 4;
-        let mut statuses: Vec<sys::TaskStatus_t> =
-            (0..capacity).map(|_| core::mem::zeroed()).collect();
-        let mut total_runtime = 0;
-        let n = sys::uxTaskGetSystemState(
-            statuses.as_mut_ptr(),
-            capacity as _,
-            &mut total_runtime,
-        ) as usize;
-
-        let tasks = statuses[..n]
-            .iter()
-            .map(|t| {
-                let name = core::ffi::CStr::from_ptr(t.pcTaskName)
-                    .to_string_lossy()
-                    .into_owned();
-                let state = match t.eCurrentState {
-                    0 => "running",
-                    1 => "ready",
-                    2 => "blocked",
-                    3 => "suspended",
-                    4 => "deleted",
-                    _ => "invalid",
-                };
-                json!({
-                    "name": name,
-                    "state": state,
-                    "prio": t.uxCurrentPriority,
-                    "core": t.xCoreID,
-                    "stack_free_min": t.usStackHighWaterMark,
-                    "runtime": t.ulRunTimeCounter,
-                })
-            })
-            .collect();
-        (tasks, total_runtime as u64)
-    }
-}
-
-// ============================================================================
-// Coredump
-// ============================================================================
-
-/// The coredump partition may hold leftover bytes from the old app partition
-/// layout. If what's there isn't a valid dump, erase it once so that later
-/// "is there a dump?" checks are reliable.
-fn init_coredump() {
-    #[allow(unsafe_code, reason = "ESP-IDF FFI")]
-    unsafe {
-        let mut addr = 0;
-        let mut size = 0;
-        let has_image =
-            sys::esp_core_dump_image_get(&mut addr, &mut size) == sys::ESP_OK;
-        if !has_image {
-            return;
-        }
-        if sys::esp_core_dump_image_check() == sys::ESP_OK {
-            warn!("diag: coredump from a previous crash is stored ({size} bytes), fetch it from /api/coredump");
-        } else {
-            warn!("diag: coredump partition holds invalid data, erasing");
-            let _ = sys::esp_core_dump_image_erase();
-        }
-    }
-}
-
-/// Flash address and size of a valid stored coredump, if any.
-pub fn coredump_location() -> Option<(usize, usize)> {
-    #[allow(unsafe_code, reason = "ESP-IDF FFI")]
-    unsafe {
-        let mut addr = 0;
-        let mut size = 0;
-        (sys::esp_core_dump_image_get(&mut addr, &mut size) == sys::ESP_OK
-            && sys::esp_core_dump_image_check() == sys::ESP_OK)
-            .then_some((addr, size))
-    }
-}
-
-/// Read `buf.len()` bytes of flash at `addr`.
-#[allow(unsafe_code, reason = "ESP-IDF FFI")]
-pub fn read_flash(addr: usize, buf: &mut [u8]) -> Result<(), sys::EspError> {
-    sys::esp!(unsafe {
-        sys::esp_flash_read(
-            core::ptr::null_mut(), // default flash chip
-            buf.as_mut_ptr().cast(),
-            addr as u32,
-            buf.len() as u32,
-        )
-    })
-}
-
-#[allow(unsafe_code, reason = "ESP-IDF FFI")]
-pub fn erase_coredump() -> Result<(), sys::EspError> {
-    sys::esp!(unsafe { sys::esp_core_dump_image_erase() })
-}
-
-fn coredump_json() -> Value {
-    let Some((_, size)) = coredump_location() else {
-        return json!({ "present": false });
-    };
-
-    #[allow(unsafe_code, reason = "ESP-IDF FFI")]
-    let summary = unsafe {
-        let mut s: sys::esp_core_dump_summary_t = core::mem::zeroed();
-        (sys::esp_core_dump_get_summary(&mut s) == sys::ESP_OK).then_some(s)
-    };
-
-    let Some(s) = summary else {
-        return json!({ "present": true, "size": size });
-    };
-
-    #[allow(unsafe_code, reason = "Reading a NUL-terminated C string")]
-    let task = unsafe { core::ffi::CStr::from_ptr(s.exc_task.as_ptr()) }
-        .to_string_lossy()
-        .into_owned();
-    let depth = (s.exc_bt_info.depth as usize).min(s.exc_bt_info.bt.len());
-    let backtrace: Vec<String> = s.exc_bt_info.bt[..depth]
+fn crumbs_json(values: &CrumbValues) -> Value {
+    let map: Map<String, Value> = Crumb::ALL
         .iter()
-        .map(|pc| format!("0x{pc:08x}"))
+        .zip(values)
+        .map(|(&c, &v)| {
+            let value = if c.is_stage() {
+                Value::from(Stage::from_index(v).map_or("?", Stage::name))
+            } else {
+                Value::from(v)
+            };
+            (c.name().to_string(), value)
+        })
         .collect();
-
-    json!({
-        "present": true,
-        "size": size,
-        "task": task,
-        "pc": format!("0x{:08x}", s.exc_pc),
-        "backtrace": backtrace,
-        "backtrace_corrupted": s.exc_bt_info.corrupted,
-    })
-}
-
-// ============================================================================
-// JSON report
-// ============================================================================
-
-fn reset_reason_name(r: u32) -> &'static str {
-    match r {
-        1 => "POWERON",
-        2 => "EXT",
-        3 => "SW",
-        4 => "PANIC",
-        5 => "INT_WDT",
-        6 => "TASK_WDT",
-        7 => "WDT",
-        8 => "DEEPSLEEP",
-        9 => "BROWNOUT",
-        10 => "SDIO",
-        11 => "USB",
-        12 => "JTAG",
-        13 => "EFUSE",
-        14 => "PWR_GLITCH",
-        15 => "CPU_LOCKUP",
-        _ => "UNKNOWN",
-    }
-}
-
-fn crumbs_json(values: &[u32; CRUMB_COUNT]) -> Value {
-    let mut map = serde_json::Map::new();
-    for (i, (&name, &v)) in CRUMB_NAMES.iter().zip(values).enumerate() {
-        let value = if STAGE_CRUMBS.contains(&i) {
-            json!(STAGE_NAMES.get(v as usize).copied().unwrap_or("?"))
-        } else {
-            json!(v)
-        };
-        map.insert(name.to_string(), value);
-    }
     Value::Object(map)
+}
+
+#[derive(Serialize)]
+struct CoredumpReport {
+    present: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    size: Option<usize>,
+    #[serde(flatten)]
+    summary: Option<coredump::Summary>,
+}
+
+#[derive(Serialize)]
+struct Report {
+    uptime_ms: u64,
+    reset_reason: Option<&'static str>,
+    now: Value,
+    prev_boot: Option<Value>,
+    heap: HeapStats,
+    total_runtime: u64,
+    tasks: Vec<TaskInfo>,
+    coredump: CoredumpReport,
 }
 
 /// Full diagnostic snapshot for `/api/debug`.
 pub fn report_json() -> String {
-    let h = heap_stats();
-    let (tasks, total_runtime) = task_list();
+    let (tasks, total_runtime) = platform::tasks();
     let prev = PREV_BOOT.get();
+    let dump = coredump::location();
 
-    json!({
-        "uptime_ms": uptime_ms(),
-        "reset_reason": prev.map(|p| reset_reason_name(p.reset_reason)),
-        "now": crumbs_json(&snapshot_crumbs()),
-        "prev_boot": prev.and_then(|p| p.crumbs.as_ref()).map(crumbs_json),
-        "heap": {
-            "internal_free": h.internal_free,
-            "internal_largest": h.internal_largest,
-            "internal_min_ever": h.internal_min_ever,
-            "psram_free": h.psram_free,
-            "psram_largest": h.psram_largest,
-            "psram_min_ever": h.psram_min_ever,
+    let report = Report {
+        uptime_ms: uptime_ms(),
+        reset_reason: prev.map(|p| p.reset_reason),
+        now: crumbs_json(&snapshot_crumbs()),
+        prev_boot: prev.and_then(|p| p.crumbs.as_ref()).map(crumbs_json),
+        heap: platform::heap_stats(),
+        total_runtime,
+        tasks,
+        coredump: CoredumpReport {
+            present: dump.is_some(),
+            size: dump.map(|(_, size)| size),
+            summary: dump.and_then(|_| coredump::summary()),
         },
-        "total_runtime": total_runtime,
-        "tasks": tasks,
-        "coredump": coredump_json(),
-    })
-    .to_string()
+    };
+    serde_json::to_string(&report)
+        .unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"))
 }

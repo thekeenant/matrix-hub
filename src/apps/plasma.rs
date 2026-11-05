@@ -1,5 +1,6 @@
 use crate::apps::App;
 use crate::buffer::Framebuffer;
+use crate::config::{HEIGHT, WIDTH};
 use core::f32::consts::PI;
 use embedded_graphics::pixelcolor::Rgb888;
 
@@ -20,11 +21,8 @@ impl App for PlasmaApp {
     }
 
     fn draw(&self, buffer: &mut Framebuffer) {
-        let width = 128;
-        let height = 32;
-
-        for y in 0..height {
-            for x in 0..width {
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
                 let xf = x as f32;
                 let yf = y as f32;
 
@@ -36,8 +34,8 @@ impl App for PlasmaApp {
                 let v3 = (xf + yf).mul_add(0.08, -self.time * 1.1).sin();
 
                 // Circular waves from an orbiting center
-                let cx = width as f32 / 2.0 + (self.time * 0.3).cos() * 30.0;
-                let cy = height as f32 / 2.0 + (self.time * 0.4).sin() * 10.0;
+                let cx = WIDTH as f32 / 2.0 + (self.time * 0.3).cos() * 30.0;
+                let cy = HEIGHT as f32 / 2.0 + (self.time * 0.4).sin() * 10.0;
                 let dist = (xf - cx).hypot(yf - cy);
                 let v4 = (dist * 0.12 - self.time * 1.5).sin();
 
@@ -56,8 +54,7 @@ impl App for PlasmaApp {
                 // Blue stays relatively high across the board for that neon backglow
                 let b = (phase * 0.5).sin().mul_add(64.0, 191.0) as u8;
 
-                let index = (y * width + x) as usize;
-                buffer.pixels[index] = Rgb888::new(r, g, b);
+                buffer.pixels[Framebuffer::index(x, y)] = Rgb888::new(r, g, b);
             }
         }
     }

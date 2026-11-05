@@ -1,6 +1,9 @@
 use crate::apps::App;
 use crate::buffer::Framebuffer;
 use crate::config::{HEIGHT, WIDTH};
+
+const W: f32 = WIDTH as f32;
+const H: f32 = HEIGHT as f32;
 use embedded_graphics::pixelcolor::Rgb888;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Circle, PrimitiveStyle};
@@ -30,8 +33,8 @@ impl ParticleApp {
 
         for _ in 0..NUM_PARTICLES {
             particles.push(Particle {
-                x: rng.gen_range(10.0..(WIDTH - 10.0)),
-                y: rng.gen_range(0.0..(HEIGHT / 2.0)),
+                x: rng.gen_range(10.0..(W - 10.0)),
+                y: rng.gen_range(0.0..(H / 2.0)),
                 vx: rng.gen_range(-2.0..2.0),
                 vy: rng.gen_range(-1.0..1.0),
                 color: Rgb888::new(
@@ -71,14 +74,14 @@ impl App for ParticleApp {
             if p.x <= 0.0 {
                 p.x = 0.0;
                 p.vx = -p.vx * 0.5; // Bounce
-            } else if p.x >= WIDTH - 2.0 {
-                p.x = WIDTH - 2.0;
+            } else if p.x >= W - 2.0 {
+                p.x = W - 2.0;
                 p.vx = -p.vx * 0.5; // Bounce
             }
 
             // Y-axis collision (floor and ceiling)
-            if p.y >= HEIGHT - 2.0 {
-                p.y = HEIGHT - 2.0;
+            if p.y >= H - 2.0 {
+                p.y = H - 2.0;
                 p.vy = -p.vy * 0.5;
                 p.vx += rng.gen_range(-0.1..0.1); // Add some random friction noise
 

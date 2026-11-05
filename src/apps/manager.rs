@@ -88,18 +88,20 @@ impl AppManager {
         self.current_tilt *= 0.5;
     }
 
-    pub fn draw(&self, fb: &mut Framebuffer, _is_connected: bool) {
+    pub fn draw(&self, fb: &mut Framebuffer) {
         self.active_app.draw(fb);
 
         // 1) Draw Swipe Flash Transition
         if self.transition_timer_ms > 0.0 {
             let progress = (self.transition_timer_ms / 1000.0).clamp(0.0, 1.0);
             let max_alpha = progress * 255.0;
-            let width = 128i32;
-            let height = 32i32;
+            use crate::config::{HEIGHT, WIDTH};
+            let width = WIDTH as i32;
 
-            for y in 0..height {
-                for x in 0..width {
+            for y in 0..HEIGHT {
+                for x in 0..WIDTH {
+                    let index = Framebuffer::index(x, y);
+                    let x = x as i32;
                     let alpha = if self.transition_direction == 1 {
                         let dist_from_right = (width - 1 - x) as f32;
                         let intensity =
@@ -113,7 +115,6 @@ impl AppManager {
                     };
 
                     if alpha > 0.0 {
-                        let index = (y * width + x) as usize;
                         let existing = fb.pixels[index];
 
                         use embedded_graphics::prelude::RgbColor;
@@ -136,6 +137,7 @@ impl AppManager {
 
         // 2) Draw Analog Tilt Feedback Arrow
         if self.arrow_fade_ms > 0.0 {
+            use crate::config::{HEIGHT, WIDTH};
             use embedded_graphics::pixelcolor::Rgb888;
             use embedded_graphics::prelude::*;
             use embedded_graphics::primitives::Triangle;
@@ -159,14 +161,15 @@ impl AppManager {
                 .stroke_width(1)
                 .build();
 
+            let cy = HEIGHT as i32 / 2;
             if self.arrow_direction > 0.0 {
                 // Tilting right, draw arrow on right edge pointing right
-                let x = 123 - offset; // Bounce inward
+                let x = WIDTH as i32 - 5 - offset; // Bounce inward
 
                 let _ = Triangle::new(
-                    Point::new(x, 12),
-                    Point::new(x, 20),
-                    Point::new(x + 4, 16),
+                    Point::new(x, cy - 4),
+                    Point::new(x, cy + 4),
+                    Point::new(x + 4, cy),
                 )
                 .into_styled(style)
                 .draw(fb);
@@ -175,9 +178,9 @@ impl AppManager {
                 let x = 4 + offset; // Bounce inward
 
                 let _ = Triangle::new(
-                    Point::new(x, 12),
-                    Point::new(x, 20),
-                    Point::new(x - 4, 16),
+                    Point::new(x, cy - 4),
+                    Point::new(x, cy + 4),
+                    Point::new(x - 4, cy),
                 )
                 .into_styled(style)
                 .draw(fb);

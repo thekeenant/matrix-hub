@@ -1,5 +1,6 @@
 use crate::apps::App;
 use crate::buffer::Framebuffer;
+use crate::config::{HEIGHT, WIDTH};
 use embedded_graphics::mono_font::{ascii::FONT_6X10, MonoTextStyle};
 use embedded_graphics::pixelcolor::Rgb888;
 use embedded_graphics::prelude::*;
@@ -58,8 +59,9 @@ impl App for SettingsApp {
             );
             let text_width = (instruction.len() * 6) as i32;
             let speed = 40.0 / 4.8; // Target ~40 pixels per real-life second
-            let total_scroll = text_width + 128 - 20;
-            let offset = 128 - ((self.time * speed) as i32 % total_scroll);
+            let width = WIDTH as i32;
+            let total_scroll = text_width + width - 20;
+            let offset = width - ((self.time * speed) as i32 % total_scroll);
 
             // Draw text
             let _ = Text::new(
@@ -70,7 +72,7 @@ impl App for SettingsApp {
             .draw(buffer);
 
             // Draw a black rectangle on the left to hide text scrolling behind the warning icon
-            let _ = Rectangle::new(Point::new(1, 1), Size::new(21, 30))
+            let _ = Rectangle::new(Point::new(1, 1), Size::new(21, HEIGHT - 2))
                 .into_styled(
                     PrimitiveStyleBuilder::new()
                         .fill_color(Rgb888::BLACK)
@@ -79,13 +81,16 @@ impl App for SettingsApp {
                 .draw(buffer);
 
             // Draw a 1px black column on the right so text doesn't overlap the right border before it's drawn
-            let _ = Rectangle::new(Point::new(126, 1), Size::new(1, 30))
-                .into_styled(
-                    PrimitiveStyleBuilder::new()
-                        .fill_color(Rgb888::BLACK)
-                        .build(),
-                )
-                .draw(buffer);
+            let _ = Rectangle::new(
+                Point::new(WIDTH as i32 - 2, 1),
+                Size::new(1, HEIGHT - 2),
+            )
+            .into_styled(
+                PrimitiveStyleBuilder::new()
+                    .fill_color(Rgb888::BLACK)
+                    .build(),
+            )
+            .draw(buffer);
 
             // Draw Warning Triangle over the black background
             let warning_color = Rgb888::new(255, 200, 0); // Yellow
@@ -129,7 +134,7 @@ impl App for SettingsApp {
             .stroke_width(1)
             .build();
 
-        let _ = Rectangle::new(Point::new(0, 0), Size::new(128, 32))
+        let _ = Rectangle::new(Point::zero(), Size::new(WIDTH, HEIGHT))
             .into_styled(style)
             .draw(buffer);
     }

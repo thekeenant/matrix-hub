@@ -100,8 +100,8 @@ fn main() -> Result<()> {
 
             // If the hardware fails to initialize, we WANT a panic so the ESP32 bootloops!
             let mut display = MatrixDisplay::new(display::MatrixConfig {
-                width: u16::try_from(WIDTH as i32).unwrap_or(0),
-                height: u16::try_from(HEIGHT as i32).unwrap_or(0),
+                width: WIDTH as u16,
+                height: HEIGHT as u16,
                 r1: PIN_R1,
                 g1: PIN_G1,
                 b1: PIN_B1,
@@ -408,7 +408,7 @@ fn main() -> Result<()> {
             if let Ok(mut fb) = return_rx.try_recv() {
                 fb.clear();
                 crate::diag::stage(Crumb::MainStage, Stage::Draw);
-                app_manager.draw(&mut fb, is_connected);
+                app_manager.draw(&mut fb);
 
                 // If the display queue is full, drop this frame and put the
                 // buffer straight back into the pool.

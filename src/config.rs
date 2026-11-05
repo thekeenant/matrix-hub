@@ -1,5 +1,6 @@
-pub const WIDTH: f32 = 128.0;
-pub const HEIGHT: f32 = 32.0;
+/// Panel size in pixels
+pub const WIDTH: u32 = 128;
+pub const HEIGHT: u32 = 32;
 
 // Adafruit MatrixPortal S3 typical pins
 pub const PIN_R1: i32 = 42;

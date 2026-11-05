@@ -467,6 +467,9 @@ pub fn render_station(
         StationState::NoTrains => {
             render_row(fb, FIRST_ROW_Y, route, "No Trains", &[], scroll);
         }
+        StationState::Unavailable => {
+            render_row(fb, FIRST_ROW_Y, route, "No data", &[], scroll);
+        }
         StationState::Live(platforms) => {
             for (i, platform) in platforms.iter().enumerate().take(2) {
                 if let Some(first_train) = platform.trains.first() {

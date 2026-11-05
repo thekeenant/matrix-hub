@@ -18,6 +18,8 @@ pub struct Platform {
 pub enum StationState {
     Loading,
     NoTrains,
+    /// Fetching has failed repeatedly; we have no current data
+    Unavailable,
     Live(Vec<Platform>),
 }
 

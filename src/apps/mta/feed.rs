@@ -123,10 +123,13 @@ pub fn process_station(
         }
     }
 
-    let state = if arrivals.is_empty() {
+    // Decide "no trains" only after filtering, so a min_minutes filter that
+    // removes every train shows "No Trains" rather than a blank board.
+    let platforms = build_platforms(arrivals, now_secs);
+    let state = if platforms.is_empty() {
         StationState::NoTrains
     } else {
-        StationState::Live(build_platforms(arrivals, now_secs))
+        StationState::Live(platforms)
     };
 
     StationData {
@@ -169,7 +172,9 @@ fn process_entity(
         }
     };
 
-    if !trip_route.starts_with(route) {
+    // Match the route itself or its express variant ("7" matches "7X"), but
+    // not other routes sharing a prefix (e.g. "G" vs the "GS" shuttle).
+    if trip_route != route && trip_route.strip_suffix('X') != Some(route) {
         return;
     }
 
@@ -221,15 +226,15 @@ fn build_platforms(
     arrivals: BTreeMap<String, Vec<RawArrival>>,
     now_secs: u64,
 ) -> Vec<Platform> {
+    let min_secs =
+        u64::from(crate::storage::get_config().min_minutes.unwrap_or(1)) * 60;
+
     let mut platforms: Vec<Platform> = arrivals
         .into_iter()
         .map(|(stop_id, mut trains)| {
             let direction = stop_id.chars().last().unwrap_or('?').to_string();
             trains.sort_by_key(|arr| arr.arrival_time);
 
-            let min_secs =
-                (crate::storage::get_config().min_minutes.unwrap_or(1) * 60)
-                    as u64;
             let trains = trains
                 .into_iter()
                 .filter(|arr| {
@@ -245,6 +250,7 @@ fn build_platforms(
 
             Platform { direction, trains }
         })
+        .filter(|p| !p.trains.is_empty())
         .collect();
 
     // N/W (northbound/westbound) first

@@ -73,6 +73,10 @@ const STATION_CONFIGS: &[StationConfig] = &[
 // Cycle through stations every N seconds if there is nothing to scroll
 const MIN_STATION_DISPLAY_MS: f32 = 5000.0;
 
+// Keep showing a station's last good data through this many consecutive
+// failed fetches (one per minute) before showing "No data"
+const MAX_STALE_FETCHES: u32 = 3;
+
 // ============================================================================
 // MtaApp
 // ============================================================================
@@ -153,9 +157,10 @@ impl App for MtaApp {
             && self.is_connected
         {
             let shared = self.shared_stations.clone();
+            let mut failures = vec![0u32; STATION_CONFIGS.len()];
             self.fetch_task =
                 Some(TimerTask::spawn(Duration::from_secs(60), move || {
-                    fetch_all_stations(&shared);
+                    fetch_all_stations(&shared, &mut failures);
                 }));
         }
 
@@ -191,7 +196,11 @@ impl App for MtaApp {
 // Background Fetch Logic
 // ============================================================================
 
-fn fetch_all_stations(shared: &Arc<Mutex<(bool, Vec<StationData>)>>) {
+/// `failures` counts consecutive failed fetches per station.
+fn fetch_all_stations(
+    shared: &Arc<Mutex<(bool, Vec<StationData>)>>,
+    failures: &mut [u32],
+) {
     use crate::diag::{self, Crumb, Stage};
 
     for (idx, config) in STATION_CONFIGS.iter().enumerate() {
@@ -208,6 +217,7 @@ fn fetch_all_stations(shared: &Arc<Mutex<(bool, Vec<StationData>)>>) {
 
         let station = match http::fetch_binary(feed_url) {
             Ok(data) => {
+                failures[idx] = 0;
                 diag::inc(Crumb::FetchOk);
                 diag::set(Crumb::LastFetchBytes, data.len() as u32);
                 diag::set_max(Crumb::MaxFetchBytes, data.len() as u32);
@@ -219,14 +229,23 @@ fn fetch_all_stations(shared: &Arc<Mutex<(bool, Vec<StationData>)>>) {
                     config.stop_id,
                 );
                 info!("MTA: parsed station {}: {:?}", config.stop_id, st.state);
-                st
+                Some(st)
             }
             Err(e) => {
                 diag::inc(Crumb::FetchErr);
-                info!("MTA: fetch error for {}: {}", config.route, e);
-                StationData {
-                    route: config.route.to_string(),
-                    state: StationState::NoTrains,
+                failures[idx] += 1;
+                info!(
+                    "MTA: fetch error for {} ({} in a row): {}",
+                    config.route, failures[idx], e
+                );
+                if failures[idx] <= MAX_STALE_FETCHES {
+                    // Keep showing the last good data for now
+                    None
+                } else {
+                    Some(StationData {
+                        route: config.route.to_string(),
+                        state: StationState::Unavailable,
+                    })
                 }
             }
         };
@@ -235,9 +254,11 @@ fn fetch_all_stations(shared: &Arc<Mutex<(bool, Vec<StationData>)>>) {
         diag::set(Crumb::LastFetchEndS, diag::uptime_s());
 
         diag::stage(Crumb::WorkerStage, Stage::Publish);
-        if let Ok(mut guard) = shared.lock() {
-            guard.1[idx] = station;
-            guard.0 = true; // set dirty flag
+        if let Some(station) = station {
+            if let Ok(mut guard) = shared.lock() {
+                guard.1[idx] = station;
+                guard.0 = true; // set dirty flag
+            }
         }
     }
 

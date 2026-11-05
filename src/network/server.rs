@@ -243,15 +243,17 @@ pub fn start_server(
     server.fn_handler("/*", Method::Get, |request| {
         info!("Captive Portal wildcard hit: {}", request.uri());
         // Redirect all other GET requests (Captive Portal checks) to the root URL
+        let [a, b, c, d] = crate::config::AP_IP;
+        let location = format!("http://{a}.{b}.{c}.{d}/");
         let mut response = request.into_response(
             302,
             Some("Found"),
-            &[("Location", "http://192.168.71.1/")],
+            &[("Location", &location)],
         )?;
         response.write_all(b"Redirecting...")?;
         Ok::<(), anyhow::Error>(())
     })?;
 
-    info!("HTTP server listening on 192.168.71.1:80");
+    info!("HTTP server listening on port 80");
     Ok(server)
 }

@@ -18,6 +18,10 @@ pub const PIN_LAT: i32 = 47;
 pub const PIN_OE: i32 = 14;
 pub const PIN_CLK: i32 = 2;
 
+/// IP of the setup access point (esp-idf-svc's default AP subnet). The
+/// captive portal's DNS answers and HTTP redirects point here.
+pub const AP_IP: [u8; 4] = [192, 168, 71, 1];
+
 // WiFi Credentials (Loaded at compile-time from .env)
 pub const AP_SSID: &str = dotenvy_macro::dotenv!("AP_SSID");
 pub const AP_PASS: &str = dotenvy_macro::dotenv!("AP_PASS");

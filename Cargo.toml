@@ -21,12 +21,12 @@ opt-level = "z"
 
 
 [dependencies]
+matrix-hub-core = { path = "core" }
 log = "0.4"
 esp-idf-svc = { version = "0.52.1", features = ["critical-section", "embassy-time-driver", "embassy-sync"] }
 # Remove `generic-queue-8` if you plan to use `embassy-time` WITH `embassy-executor`
 embassy-time = { version = "0.5", features = ["generic-queue-8"] }
 embedded-graphics = "0.8.1"
-rand = "0.8.5"
 embedded-svc = "0.29"
 anyhow = "1.0"
 dotenvy_macro = "0.15.7"
@@ -37,10 +37,6 @@ lis3dh = "0.4.4"
 
 [build-dependencies]
 embuild = "0.33"
-bindgen = "0.69"
-buffa-build = "0.7"
-protoc-prebuilt = "0.3"
-buffa = "0.7"
 
 [package.metadata.esp-idf-sys]
 extra_components = [{ component_dirs = ["components/hub75_wrapper"], bindings_header = "components/hub75_wrapper/bindings.h", bindings_module = "hub75" }]

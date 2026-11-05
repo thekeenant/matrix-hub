@@ -6,7 +6,7 @@ pub mod settings;
 
 use crate::buffer::Framebuffer;
 use crate::input::Accel;
-use crate::network::NetworkStatus;
+use crate::net::NetworkStatus;
 
 /// Everything an app may need to know to advance one frame.
 #[derive(Clone, Copy, Debug)]

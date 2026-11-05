@@ -12,6 +12,12 @@ pub struct Framebuffer {
     pub pixels: Vec<Rgb888>,
 }
 
+impl Default for Framebuffer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Framebuffer {
     pub const LEN: usize = (WIDTH * HEIGHT) as usize;
 

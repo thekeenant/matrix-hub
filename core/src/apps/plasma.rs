@@ -8,6 +8,12 @@ pub struct PlasmaApp {
     time: f32,
 }
 
+impl Default for PlasmaApp {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PlasmaApp {
     pub const fn new() -> Self {
         Self { time: 0.0 }

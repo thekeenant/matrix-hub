@@ -7,7 +7,8 @@ const H: f32 = HEIGHT as f32;
 use embedded_graphics::pixelcolor::Rgb888;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Circle, PrimitiveStyle};
-use rand::Rng;
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 
 const NUM_PARTICLES: usize = 120;
 
@@ -21,14 +22,29 @@ struct Particle {
 }
 
 pub struct ParticleApp {
+    rng: SmallRng,
     particles: Vec<Particle>,
     gravity_x: f32,
     gravity_y: f32,
 }
 
+impl Default for ParticleApp {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ParticleApp {
     pub fn new() -> Self {
-        let mut rng = rand::thread_rng();
+        Self::with_rng(SmallRng::from_entropy())
+    }
+
+    /// Deterministic particles, for tests.
+    pub fn with_seed(seed: u64) -> Self {
+        Self::with_rng(SmallRng::seed_from_u64(seed))
+    }
+
+    fn with_rng(mut rng: SmallRng) -> Self {
         let mut particles = Vec::with_capacity(NUM_PARTICLES);
 
         for _ in 0..NUM_PARTICLES {
@@ -46,6 +62,7 @@ impl ParticleApp {
         }
 
         Self {
+            rng,
             particles,
             gravity_x: 0.0,
             gravity_y: 0.15,
@@ -60,8 +77,7 @@ impl App for ParticleApp {
         self.gravity_x = -frame.accel.x * 0.25;
         self.gravity_y = frame.accel.y * 0.25 + 0.08;
 
-        let mut rng = rand::thread_rng();
-
+        let rng = &mut self.rng;
         for p in &mut self.particles {
             p.vx += self.gravity_x;
             p.vy += self.gravity_y;

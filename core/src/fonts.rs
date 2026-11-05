@@ -1,7 +1,7 @@
 use embedded_graphics::{
     geometry::Size,
     image::ImageRaw,
-    mono_font::{mapping::ASCII, MonoFont},
+    mono_font::{MonoFont, mapping::ASCII},
 };
 
 const FONT_6X12_BOLD_DATA: &[u8] = &[

@@ -3,9 +3,9 @@
 
 use crate::apps::{App, Frame};
 use crate::buffer::Framebuffer;
-use crate::config::{AP_SSID, HEIGHT, WIDTH};
-use crate::network::NetworkStatus;
-use embedded_graphics::mono_font::{ascii::FONT_6X10, MonoTextStyle};
+use crate::config::{HEIGHT, WIDTH};
+use crate::net::NetworkStatus;
+use embedded_graphics::mono_font::{MonoTextStyle, ascii::FONT_6X10};
 use embedded_graphics::pixelcolor::Rgb888;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{
@@ -21,21 +21,25 @@ const SCROLL_SPEED: f32 = 40.0 / 4.8;
 const WARNING_YELLOW: Rgb888 = Rgb888::new(255, 200, 0);
 
 pub struct SettingsApp {
+    /// Name of the setup access point, shown in the instructions
+    ap_ssid: &'static str,
     network: NetworkStatus,
     /// Animation clock (arbitrary units: 0.005 per ms)
     time: f32,
 }
 
 impl SettingsApp {
-    pub const fn new() -> Self {
+    pub const fn new(ap_ssid: &'static str) -> Self {
         Self {
+            ap_ssid,
             network: NetworkStatus::Connecting,
             time: 0.0,
         }
     }
 
     fn draw_setup_instructions(&self, fb: &mut Framebuffer, ip: Ipv4Addr) {
-        let instruction = format!("Join WiFi '{AP_SSID}' then visit {ip}");
+        let instruction =
+            format!("Join WiFi '{}' then visit {ip}", self.ap_ssid);
         let text_width = instruction.len() as i32 * CHAR_WIDTH;
         let width = WIDTH as i32;
         let total_scroll = text_width + width - 20;

@@ -16,7 +16,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use crate::platform::{self, coredump, HeapStats, TaskInfo};
-use crate::util::named_enum;
+use matrix_hub_core::named_enum;
 
 // ============================================================================
 // Breadcrumbs

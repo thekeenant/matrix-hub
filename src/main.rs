@@ -18,27 +18,24 @@ use log::info;
 use std::sync::mpsc;
 use std::time::Duration;
 
-mod apps;
-mod buffer;
 mod config;
 mod diag;
 mod display;
-mod fonts;
 mod input;
+mod mta;
 mod network;
 mod platform;
-pub mod proto;
-pub mod storage;
+mod storage;
 mod task;
-mod util;
 
-use apps::manager::AppManager;
-use apps::Frame;
-use buffer::FrameProducer;
+use matrix_hub_core::apps::manager::AppManager;
+use matrix_hub_core::apps::{self as apps, Frame};
+use matrix_hub_core::buffer::{self as buffer, FrameProducer};
+use matrix_hub_core::util::Interval;
+
 use diag::{Crumb, Stage};
 use input::Input;
 use network::wifi::WifiManager;
-use util::Interval;
 
 /// Framebuffers circulating between the main loop and the display
 const FRAMEBUFFER_POOL: usize = 3;
@@ -95,10 +92,10 @@ fn main() -> Result<()> {
     platform::set_current_task_priority(MAIN_TASK_PRIORITY);
 
     let mut apps = AppManager::new(vec![
-        || Box::new(apps::mta::MtaApp::new()),
+        || Box::new(apps::mta::MtaApp::new(mta::start_fetching)),
         || Box::new(apps::plasma::PlasmaApp::new()),
         || Box::new(apps::particles::ParticleApp::new()),
-        || Box::new(apps::settings::SettingsApp::new()),
+        || Box::new(apps::settings::SettingsApp::new(config::AP_SSID)),
     ]);
 
     block_on(async {

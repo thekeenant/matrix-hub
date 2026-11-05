@@ -94,11 +94,13 @@ fn read_varint(buf: &[u8]) -> Option<(u64, &[u8])> {
     None
 }
 
-/// Process a single station from a parsed feed stream.
+/// Arrivals for one route at one station, from a raw GTFS-RT feed. Trains
+/// arriving within `min_minutes` are left out.
 pub fn process_station(
     data: &[u8],
     route: &str,
     station_id: &str,
+    min_minutes: u32,
 ) -> StationData {
     let mut now_secs = 0;
     let mut arrivals = BTreeMap::new();
@@ -125,7 +127,7 @@ pub fn process_station(
 
     // Decide "no trains" only after filtering, so a min_minutes filter that
     // removes every train shows "No Trains" rather than a blank board.
-    let platforms = build_platforms(arrivals, now_secs);
+    let platforms = build_platforms(arrivals, now_secs, min_minutes);
     let state = if platforms.is_empty() {
         StationState::NoTrains
     } else {
@@ -225,9 +227,9 @@ fn process_entity(
 fn build_platforms(
     arrivals: BTreeMap<String, Vec<RawArrival>>,
     now_secs: u64,
+    min_minutes: u32,
 ) -> Vec<Platform> {
-    let min_secs =
-        u64::from(crate::storage::get_config().min_minutes.unwrap_or(1)) * 60;
+    let min_secs = u64::from(min_minutes) * 60;
 
     let mut platforms: Vec<Platform> = arrivals
         .into_iter()

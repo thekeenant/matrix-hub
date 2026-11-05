@@ -1,8 +1,6 @@
-//! Board configuration: panel geometry, pins, and compiled-in defaults.
+//! Board configuration: pins and compiled-in defaults.
 
-/// Panel size in pixels
-pub const WIDTH: u32 = 128;
-pub const HEIGHT: u32 = 32;
+pub use matrix_hub_core::config::{AP_IP, HEIGHT, WIDTH};
 
 /// GPIO numbers of the HUB75 connector.
 pub struct PanelPins {
@@ -40,10 +38,6 @@ pub const PANEL_PINS: PanelPins = PanelPins {
     oe: 14,
     clk: 2,
 };
-
-/// IP of the setup access point (esp-idf-svc's default AP subnet). The
-/// captive portal's DNS answers and HTTP redirects point here.
-pub const AP_IP: [u8; 4] = [192, 168, 71, 1];
 
 // Setup-AP credentials (compiled in from .env)
 pub const AP_SSID: &str = dotenvy_macro::dotenv!("AP_SSID");

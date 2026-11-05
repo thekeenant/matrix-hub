@@ -13,9 +13,9 @@ use log::info;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::Duration;
 
-use crate::buffer::FrameConsumer;
 use crate::config::{PanelPins, HEIGHT, PANEL_PINS, WIDTH};
 use crate::diag::{self, Crumb, Stage};
+use matrix_hub_core::buffer::FrameConsumer;
 
 /// Start the display thread on core 1 and wait until the panel (and its DMA
 /// buffers) are initialised. Frames arrive through `frames`.

@@ -3,7 +3,7 @@
 
 use embedded_graphics::{
     geometry::{Point, Size},
-    mono_font::{ascii::FONT_7X13, MonoTextStyle},
+    mono_font::{MonoTextStyle, ascii::FONT_7X13},
     pixelcolor::Rgb888,
     prelude::*,
     primitives::{Circle, PrimitiveStyle, Triangle},
@@ -30,8 +30,8 @@ const TIME_SPACING: i32 = 3; // spacing between columns (updated)
 const RIGHT_MARGIN: i32 = 3; // padding between scrolling text and times
 const TIME_CHAR_WIDTH: i32 = 7; // FONT_7X13
 const CHAR_WIDTH: i32 = 7; // FONT_7X13 (character width for destination text)
-                           // ============================================================================// Scroll State
-                           // ============================================================================
+// ============================================================================// Scroll State
+// ============================================================================
 
 pub const SCROLL_HOLD_START_MS: f32 = 2500.0;
 pub const SCROLL_TIME_PER_PIXEL_MS: f32 = 50.0;

@@ -11,6 +11,7 @@ use std::sync::mpsc;
 mod apps;
 mod buffer;
 mod config;
+mod diag;
 mod display;
 mod fonts;
 mod input;
@@ -37,6 +38,9 @@ fn main() -> Result<()> {
 
     info!("Starting Matrix Hub v1 with Error Bubbling...");
 
+    // Capture breadcrumbs left by the previous boot before anything else runs
+    crate::diag::init_boot();
+
     // Pre-allocate the background worker thread stack (16KB) early
     // to avoid OOM fragmentation failures later when rotating apps
     crate::task::init();
@@ -56,8 +60,14 @@ fn main() -> Result<()> {
     let btn_down_driver = PinDriver::input(peripherals.pins.gpio7, Pull::Up)?;
     let mut btn_down = Button::new(btn_down_driver);
 
-    let (tx, rx) = mpsc::sync_channel::<Box<Framebuffer>>(2);
-    let (return_tx, return_rx) = mpsc::sync_channel::<Box<Framebuffer>>(2);
+    // A fixed pool of framebuffers circulates between the logic loop and the
+    // display thread; nothing is allocated per frame (12KB alloc/free churn
+    // used to fragment internal RAM). Each channel can hold the whole pool, so
+    // returning a buffer never fails.
+    const FRAMEBUFFER_POOL: usize = 3;
+    let (tx, rx) = mpsc::sync_channel::<Box<Framebuffer>>(FRAMEBUFFER_POOL);
+    let (return_tx, return_rx) =
+        mpsc::sync_channel::<Box<Framebuffer>>(FRAMEBUFFER_POOL);
     let display_return_tx = return_tx.clone();
 
     // We use a channel to block the main thread until the display is fully initialized
@@ -77,76 +87,109 @@ fn main() -> Result<()> {
         .set()
         .map_err(|e| anyhow::anyhow!("Failed to set core 1 config: {:?}", e))?;
 
-    std::thread::spawn(move || {
-        info!(
-            "Display Actor started on {:?}",
-            esp_idf_svc::hal::cpu::core()
-        );
+    // Explicit stack size: a bare `std::thread::spawn` ignores
+    // ThreadSpawnConfiguration::stack_size and got a 32KB stack
+    // (of which ~3KB was used) out of scarce internal RAM.
+    std::thread::Builder::new()
+        .stack_size(8192)
+        .spawn(move || {
+            info!(
+                "Display Actor started on {:?}",
+                esp_idf_svc::hal::cpu::core()
+            );
 
-        // If the hardware fails to initialize, we WANT a panic so the ESP32 bootloops!
-        let mut display = MatrixDisplay::new(display::MatrixConfig {
-            width: u16::try_from(WIDTH as i32).unwrap_or(0),
-            height: u16::try_from(HEIGHT as i32).unwrap_or(0),
-            r1: PIN_R1,
-            g1: PIN_G1,
-            b1: PIN_B1,
-            r2: PIN_R2,
-            g2: PIN_G2,
-            b2: PIN_B2,
-            a: PIN_A,
-            b: PIN_B,
-            c: PIN_C,
-            d: PIN_D,
-            e: PIN_E,
-            lat: PIN_LAT,
-            oe: PIN_OE,
-            clk: PIN_CLK,
-        })
-        .unwrap_or_else(|_| {
-            panic!("CRITICAL: Failed to initialize Matrix Display!")
-        });
+            // If the hardware fails to initialize, we WANT a panic so the ESP32 bootloops!
+            let mut display = MatrixDisplay::new(display::MatrixConfig {
+                width: u16::try_from(WIDTH as i32).unwrap_or(0),
+                height: u16::try_from(HEIGHT as i32).unwrap_or(0),
+                r1: PIN_R1,
+                g1: PIN_G1,
+                b1: PIN_B1,
+                r2: PIN_R2,
+                g2: PIN_G2,
+                b2: PIN_B2,
+                a: PIN_A,
+                b: PIN_B,
+                c: PIN_C,
+                d: PIN_D,
+                e: PIN_E,
+                lat: PIN_LAT,
+                oe: PIN_OE,
+                clk: PIN_CLK,
+            })
+            .unwrap_or_else(|_| {
+                panic!("CRITICAL: Failed to initialize Matrix Display!")
+            });
 
-        info!("Display hardware ready!");
+            info!("Display hardware ready!");
 
-        // Signal the main thread that DMA memory is safely allocated!
-        let _ = display_ready_tx.send(());
+            // Signal the main thread that DMA memory is safely allocated!
+            let _ = display_ready_tx.send(());
 
-        let mut current_brightness = crate::storage::global_config()
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .brightness as u8;
-        display.set_brightness(current_brightness);
-
-        while let Ok(framebuffer) = rx.recv() {
-            let new_brightness = crate::storage::global_config()
+            let mut current_brightness = crate::storage::global_config()
                 .read()
                 .unwrap_or_else(|e| e.into_inner())
                 .brightness as u8;
-            if new_brightness != current_brightness {
-                current_brightness = new_brightness;
-                display.set_brightness(current_brightness);
+            display.set_brightness(current_brightness);
+
+            // If this thread ever stops looping (e.g. stuck inside the driver),
+            // the watchdog panics, saves a coredump, and reboots.
+            crate::diag::wdt_subscribe_current();
+
+            use crate::diag::{Crumb, Stage};
+            loop {
+                crate::diag::wdt_feed();
+                crate::diag::stage(Crumb::DisplayStage, Stage::DisplayWait);
+
+                // Wake up periodically even without frames so the watchdog stays
+                // fed; a stalled main loop is caught by its own subscription.
+                let framebuffer =
+                    match rx.recv_timeout(std::time::Duration::from_secs(1)) {
+                        Ok(fb) => fb,
+                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    };
+
+                crate::diag::stage(
+                    Crumb::DisplayStage,
+                    Stage::DisplayBrightness,
+                );
+                let new_brightness = crate::storage::global_config()
+                    .read()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .brightness as u8;
+                if new_brightness != current_brightness {
+                    current_brightness = new_brightness;
+                    display.set_brightness(current_brightness);
+                }
+
+                crate::diag::stage(Crumb::DisplayStage, Stage::DisplayClear);
+                display.clear_display();
+
+                let width = WIDTH as usize;
+                let iter = framebuffer.pixels.iter().enumerate().filter_map(
+                    |(i, &color)| {
+                        if color.r() == 0 && color.g() == 0 && color.b() == 0 {
+                            None
+                        } else {
+                            let x = (i % width) as i32;
+                            let y = (i / width) as i32;
+                            Some(Pixel(Point::new(x, y), color))
+                        }
+                    },
+                );
+
+                crate::diag::stage(Crumb::DisplayStage, Stage::DisplayDraw);
+                let _ = display.draw_iter(iter);
+                crate::diag::stage(Crumb::DisplayStage, Stage::DisplayFlip);
+                display.flip();
+                crate::diag::inc(Crumb::DisplayFrames);
+                let _ = display_return_tx.try_send(framebuffer);
             }
-
-            display.clear_display();
-
-            let width = WIDTH as usize;
-            let iter = framebuffer.pixels.iter().enumerate().filter_map(
-                |(i, &color)| {
-                    if color.r() == 0 && color.g() == 0 && color.b() == 0 {
-                        None
-                    } else {
-                        let x = (i % width) as i32;
-                        let y = (i / width) as i32;
-                        Some(Pixel(Point::new(x, y), color))
-                    }
-                },
-            );
-
-            let _ = display.draw_iter(iter);
-            display.flip();
-            let _ = display_return_tx.try_send(framebuffer);
-        }
-    });
+        })
+        .map_err(|e| {
+            anyhow::anyhow!("Failed to spawn display thread: {e:?}")
+        })?;
 
     // Reset thread config back to default BEFORE waiting, just in case
     esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration::default()
@@ -209,8 +252,9 @@ fn main() -> Result<()> {
         esp_idf_svc::sys::vTaskPrioritySet(std::ptr::null_mut(), 15);
     }
 
-    let _ = return_tx.send(Box::new(Framebuffer::new()));
-    let _ = return_tx.send(Box::new(Framebuffer::new()));
+    for _ in 0..FRAMEBUFFER_POOL {
+        let _ = return_tx.send(Box::new(Framebuffer::new()));
+    }
 
     block_on(async {
         info!("Logic Actor started on {:?}", esp_idf_svc::hal::cpu::core());
@@ -226,8 +270,20 @@ fn main() -> Result<()> {
         let mut ip_str: Option<String> = None;
         let mut wifi_check_countdown = 0u32;
         let mut wifi_reconnect_countdown: Option<u32> = None;
+        // True once we've dropped the AP and run as a plain WiFi client
+        let mut client_only = false;
+        let mut secs_disconnected = 0u32;
 
+        // If this loop ever stops iterating for CONFIG_ESP_TASK_WDT_TIMEOUT_S,
+        // the watchdog panics, saves a coredump, and reboots.
+        crate::diag::wdt_subscribe_current();
+
+        use crate::diag::{Crumb, Stage};
         loop {
+            crate::diag::wdt_feed();
+            crate::diag::inc(Crumb::MainFrames);
+            crate::diag::maybe_test_hang();
+            crate::diag::stage(Crumb::MainStage, Stage::Input);
             if btn_up.is_clicked() {
                 app_manager.next_app();
             }
@@ -235,6 +291,7 @@ fn main() -> Result<()> {
                 app_manager.previous_app();
             }
 
+            crate::diag::stage(Crumb::MainStage, Stage::Gesture);
             if let Some(gd) = &mut gesture_detector {
                 match gd.poll() {
                     input::GestureEvent::SwipeRight => app_manager.next_app(),
@@ -250,6 +307,7 @@ fn main() -> Result<()> {
                 }
             }
 
+            crate::diag::stage(Crumb::MainStage, Stage::WifiCheck);
             // Check for new credentials from HTTP server
             if let Ok((_new_ssid, _new_pass)) = wifi_rx.try_recv() {
                 log::info!("Received new credentials! Scheduling reconnect in 1s to allow HTTP response to flush...");
@@ -263,6 +321,8 @@ fn main() -> Result<()> {
                     is_connected = false;
                     ip_str = None;
                     wifi_reconnect_countdown = None;
+                    client_only = false;
+                    secs_disconnected = 0;
                 } else {
                     wifi_reconnect_countdown = Some(count - 1);
                 }
@@ -271,9 +331,15 @@ fn main() -> Result<()> {
             // Re-check WiFi IP status once per second (~every 60 frames) to avoid
             // contending with the background HTTP thread on the ESP-IDF netif lock.
             if wifi_check_countdown == 0 {
+                crate::diag::tick_1s();
+                // The netif keeps its old IP for a while after the link
+                // drops, so also ask the WiFi driver whether we're associated.
+                let associated = wifi.is_connected().unwrap_or(false);
                 let sta_result = wifi.sta_netif().get_ip_info();
                 match sta_result {
-                    Ok(info) if info.ip.to_string() != "0.0.0.0" => {
+                    Ok(info)
+                        if associated && info.ip.to_string() != "0.0.0.0" =>
+                    {
                         // Switch to Client mode to drop the AP once connected
                         if !is_connected {
                             if let Ok(
@@ -292,12 +358,35 @@ fn main() -> Result<()> {
                                     "Switched to Client-only mode, AP dropped."
                                 );
                             }
+                            client_only = true;
                         }
                         is_connected = true;
+                        secs_disconnected = 0;
                         ip_str = Some(info.ip.to_string());
                     }
                     _ => {
                         is_connected = false;
+
+                        // Neither ESP-IDF nor EspWifi reconnect on their own
+                        // after the link drops (router reboot, DHCP renewal
+                        // failure, interference...). Once we've switched to
+                        // client-only mode, keep retrying periodically. (While
+                        // the AP is up we don't, as STA scans disrupt it.)
+                        if client_only {
+                            secs_disconnected += 1;
+                            if secs_disconnected % 15 == 0 {
+                                crate::diag::stage(
+                                    Crumb::MainStage,
+                                    Stage::WifiReconnect,
+                                );
+                                log::warn!(
+                                    "WiFi down for {secs_disconnected}s, retrying connect"
+                                );
+                                let _ = wifi.connect();
+                                crate::diag::inc(Crumb::WifiReconnects);
+                            }
+                        }
+
                         if let Ok(ap_info) = wifi.ap_netif().get_ip_info() {
                             ip_str = Some(format!("AP: {}", ap_info.ip));
                         } else {
@@ -305,22 +394,31 @@ fn main() -> Result<()> {
                         }
                     }
                 }
+                crate::diag::set(Crumb::WifiConnected, u32::from(is_connected));
                 wifi_check_countdown = 60;
             }
             wifi_check_countdown -= 1;
 
-            let mut fb = return_rx
-                .try_recv()
-                .unwrap_or_else(|_| Box::new(Framebuffer::new()));
-            fb.clear();
-
             let accel_data = gesture_detector.as_ref().map(|gd| gd.last_accel);
+            crate::diag::stage(Crumb::MainStage, Stage::Update);
             app_manager.update(16.0, is_connected, ip_str.clone(), accel_data);
-            app_manager.draw(&mut fb, is_connected);
 
-            // Using try_send is inherently safe, it just drops the frame if the receiver is full
-            let _ = tx.try_send(fb);
+            // Take a free buffer from the pool. If the display still holds all
+            // of them, skip drawing this frame rather than allocating.
+            if let Ok(mut fb) = return_rx.try_recv() {
+                fb.clear();
+                crate::diag::stage(Crumb::MainStage, Stage::Draw);
+                app_manager.draw(&mut fb, is_connected);
 
+                // If the display queue is full, drop this frame and put the
+                // buffer straight back into the pool.
+                crate::diag::stage(Crumb::MainStage, Stage::Send);
+                if let Err(mpsc::TrySendError::Full(fb)) = tx.try_send(fb) {
+                    let _ = return_tx.try_send(fb);
+                }
+            }
+
+            crate::diag::stage(Crumb::MainStage, Stage::Sleep);
             embassy_time::Timer::after_millis(16).await;
         }
     });

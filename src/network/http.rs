@@ -20,6 +20,9 @@ fn fetch_with_headers(url: &str, headers: &[(&str, &str)]) -> Result<String> {
 }
 
 fn fetch(url: &str, headers: &[(&str, &str)]) -> Result<Vec<u8>> {
+    use crate::diag::{self, Crumb, Stage};
+    diag::stage(Crumb::WorkerStage, Stage::HttpConnect);
+
     let connection = EspHttpConnection::new(&Configuration {
         use_global_ca_store: true,
         crt_bundle_attach: Some(esp_idf_svc::sys::esp_crt_bundle_attach),
@@ -42,6 +45,7 @@ fn fetch(url: &str, headers: &[(&str, &str)]) -> Result<Vec<u8>> {
         return Err(anyhow!("HTTP {status}: {url}"));
     }
 
+    diag::stage(Crumb::WorkerStage, Stage::HttpRead);
     let mut buf = [0u8; 1024];
     let mut result = Vec::new();
     loop {

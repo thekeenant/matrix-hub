@@ -1,17 +1,23 @@
 use crate::config::{HEIGHT, WIDTH};
 use embedded_graphics::{pixelcolor::Rgb888, prelude::*};
 
-#[derive(Clone)]
 pub struct Framebuffer {
     pub pixels: Vec<Rgb888>,
 }
 
 impl Framebuffer {
     pub fn new() -> Self {
-        Self {
-            // Allocate the 12KB buffer on the heap to save thread stack space
-            pixels: vec![Rgb888::BLACK; (WIDTH * HEIGHT) as usize],
-        }
+        // 128x32 RGB888 is 12KB. ESP-IDF's malloc serves requests at or below
+        // CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL (16KB) from scarce internal RAM
+        // first, and only larger ones from PSRAM first. The framebuffer is only
+        // touched by the CPU, so over-reserve capacity past that threshold to
+        // land it in PSRAM and leave internal RAM for WiFi/lwIP/DMA.
+        const PSRAM_THRESHOLD_BYTES: usize = 16 * 1024;
+        let len = (WIDTH * HEIGHT) as usize;
+        let capacity = len.max(PSRAM_THRESHOLD_BYTES / size_of::<Rgb888>() + 1);
+        let mut pixels = Vec::with_capacity(capacity);
+        pixels.resize(len, Rgb888::BLACK);
+        Self { pixels }
     }
 
     pub fn clear(&mut self) {

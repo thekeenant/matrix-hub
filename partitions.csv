@@ -1,0 +1,7 @@
+# ESP-IDF partition table. Fits 4MB+ flash (the MatrixPortal S3 has 8MB).
+# nvs/phy_init match the previous default layout so saved config survives reflashing.
+# Name,    Type, SubType,  Offset,   Size
+nvs,       data, nvs,      0x9000,   0x6000,
+phy_init,  data, phy,      0xf000,   0x1000,
+factory,   app,  factory,  0x10000,  0x3D0000,
+coredump,  data, coredump, 0x3E0000, 0x20000,

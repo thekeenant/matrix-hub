@@ -192,6 +192,8 @@ impl App for MtaApp {
 // ============================================================================
 
 fn fetch_all_stations(shared: &Arc<Mutex<(bool, Vec<StationData>)>>) {
+    use crate::diag::{self, Crumb, Stage};
+
     for (idx, config) in STATION_CONFIGS.iter().enumerate() {
         let feed_url = get_route_info(config.route).feed_url;
         info!(
@@ -199,8 +201,16 @@ fn fetch_all_stations(shared: &Arc<Mutex<(bool, Vec<StationData>)>>) {
             feed_url, config.route, config.stop_id
         );
 
+        diag::inc(Crumb::FetchStarted);
+        let started_ms = diag::uptime_ms();
+
         let station = match http::fetch_binary(feed_url) {
             Ok(data) => {
+                diag::inc(Crumb::FetchOk);
+                diag::set(Crumb::LastFetchBytes, data.len() as u32);
+                diag::set_max(Crumb::MaxFetchBytes, data.len() as u32);
+
+                diag::stage(Crumb::WorkerStage, Stage::Parse);
                 let st = feed::process_station(
                     data.as_slice(),
                     config.route,
@@ -210,6 +220,7 @@ fn fetch_all_stations(shared: &Arc<Mutex<(bool, Vec<StationData>)>>) {
                 st
             }
             Err(e) => {
+                diag::inc(Crumb::FetchErr);
                 info!("MTA: fetch error for {}: {}", config.route, e);
                 StationData {
                     route: config.route.to_string(),
@@ -218,9 +229,15 @@ fn fetch_all_stations(shared: &Arc<Mutex<(bool, Vec<StationData>)>>) {
             }
         };
 
+        diag::set(Crumb::LastFetchMs, (diag::uptime_ms() - started_ms) as u32);
+        diag::set(Crumb::LastFetchEndS, diag::uptime_s());
+
+        diag::stage(Crumb::WorkerStage, Stage::Publish);
         if let Ok(mut guard) = shared.lock() {
             guard.1[idx] = station;
             guard.0 = true; // set dirty flag
         }
     }
+
+    diag::stage(Crumb::WorkerStage, Stage::WorkerSleep);
 }

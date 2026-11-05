@@ -126,6 +126,68 @@ pub fn start_server(
         Ok::<(), anyhow::Error>(())
     })?;
 
+    // Diagnostics: live health snapshot (JSON)
+    server.fn_handler("/api/debug", Method::Get, |request| {
+        let body = crate::diag::report_json();
+        let mut response = request.into_response(
+            200,
+            None,
+            &[
+                ("Content-Type", "application/json"),
+                ("Cache-Control", "no-store"),
+            ],
+        )?;
+        response.write_all(body.as_bytes())?;
+        Ok::<(), anyhow::Error>(())
+    })?;
+
+    // Diagnostics: raw coredump image from flash (decode with
+    // scripts/decode-coredump.sh). 404 if there is none.
+    server.fn_handler("/api/coredump", Method::Get, |request| {
+        let Some((addr, size)) = crate::diag::coredump_location() else {
+            request
+                .into_status_response(404)?
+                .write_all(b"No coredump")?;
+            return Ok::<(), anyhow::Error>(());
+        };
+
+        let len = size.to_string();
+        let mut response = request.into_response(
+            200,
+            None,
+            &[
+                ("Content-Type", "application/octet-stream"),
+                ("Content-Length", &len),
+            ],
+        )?;
+        let mut buf = vec![0u8; 1024];
+        let mut offset = 0;
+        while offset < size {
+            let n = buf.len().min(size - offset);
+            crate::diag::read_flash(addr + offset, &mut buf[..n])?;
+            response.write_all(&buf[..n])?;
+            offset += n;
+        }
+        Ok::<(), anyhow::Error>(())
+    })?;
+
+    server.fn_handler("/api/coredump", Method::Delete, |request| {
+        crate::diag::erase_coredump()?;
+        request.into_ok_response()?.write_all(b"Erased")?;
+        Ok::<(), anyhow::Error>(())
+    })?;
+
+    // Diagnostics: deliberately hang the main loop to test the watchdog,
+    // coredump, and reboot path. Expect a reboot ~10s later.
+    server.fn_handler("/api/debug/test-hang", Method::Post, |request| {
+        crate::diag::TEST_HANG
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        request
+            .into_ok_response()?
+            .write_all(b"Main loop will hang; expect a watchdog reboot")?;
+        Ok::<(), anyhow::Error>(())
+    })?;
+
     server.fn_handler("/*", Method::Get, |request| {
         info!("Captive Portal wildcard hit: {}", request.uri());
         // Redirect all other GET requests (Captive Portal checks) to the root URL

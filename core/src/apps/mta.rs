@@ -10,6 +10,8 @@
 pub mod data;
 pub mod feed;
 pub mod render;
+#[cfg(test)]
+mod render_golden;
 pub mod routes;
 pub mod stops {
     include!(concat!(env!("OUT_DIR"), "/stops.rs"));
@@ -239,12 +241,9 @@ impl MtaApp {
     }
 
     fn recalculate_cycle(&mut self) {
-        self.scroll_cycle_ms = match &self.current_station().state {
-            StationState::Live(platforms) => {
-                compute_cycle_ms(platforms).max(MIN_STATION_DISPLAY_MS)
-            }
-            _ => MIN_STATION_DISPLAY_MS,
-        };
+        let platforms = self.current_station().state.platforms();
+        self.scroll_cycle_ms =
+            compute_cycle_ms(platforms).max(MIN_STATION_DISPLAY_MS);
     }
 
     /// Adopt fresh data from the background job, if there is any. Never
@@ -284,5 +283,241 @@ impl App for MtaApp {
             elapsed_ms: self.scroll_elapsed_ms,
         };
         render_station(fb, &station.state, &station.route, &scroll);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::apps::mta::feed::tests::{feed, trip};
+    use crate::input::Accel;
+    use crate::net::NetworkStatus;
+    use googletest::prelude::*;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::net::Ipv4Addr;
+
+    thread_local! {
+        /// The Fetcher handed to `capture_fetcher`, so tests can run it
+        static STARTED: RefCell<Vec<Fetcher>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn capture_fetcher(fetcher: Fetcher) -> Box<dyn Send> {
+        STARTED.with(|s| s.borrow_mut().push(fetcher));
+        Box::new(())
+    }
+
+    fn started_count() -> usize {
+        STARTED.with(|s| s.borrow().len())
+    }
+
+    fn run_fetcher(source: &mut dyn FeedSource) {
+        // Evaluate log messages too (there's no logger, but formatting runs)
+        log::set_max_level(log::LevelFilter::Trace);
+        STARTED.with(|s| s.borrow_mut()[0].run(source));
+    }
+
+    /// A source relying on the default (no-op) progress hooks
+    struct OfflineSource;
+
+    impl FeedSource for OfflineSource {
+        fn fetch(&mut self, _url: &str) -> anyhow::Result<Vec<u8>> {
+            Ok(feed(vec![]))
+        }
+        fn min_minutes(&self) -> u32 {
+            0
+        }
+    }
+
+    /// Serves canned feeds; URLs without one fail.
+    #[derive(Default)]
+    struct FakeSource {
+        feeds: HashMap<&'static str, Vec<u8>>,
+        min_minutes: u32,
+        hooks: Vec<&'static str>,
+    }
+
+    impl FeedSource for FakeSource {
+        fn fetch(&mut self, url: &str) -> anyhow::Result<Vec<u8>> {
+            self.feeds
+                .get(url)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("unreachable"))
+        }
+        fn min_minutes(&self) -> u32 {
+            self.min_minutes
+        }
+        fn on_parse(&mut self) {
+            self.hooks.push("parse");
+        }
+        fn on_publish(&mut self) {
+            self.hooks.push("publish");
+        }
+    }
+
+    fn frame(dt_ms: f32, connected: bool) -> Frame {
+        Frame {
+            dt_ms,
+            network: if connected {
+                NetworkStatus::Connected(Ipv4Addr::new(10, 0, 0, 2))
+            } else {
+                NetworkStatus::Connecting
+            },
+            accel: Accel::default(),
+        }
+    }
+
+    fn states(app: &MtaApp) -> Vec<String> {
+        app.stations
+            .iter()
+            .map(|s| match &s.state {
+                StationState::Live(p) => {
+                    format!("{} live({})", s.route, p.len())
+                }
+                other => format!("{} {other:?}", s.route),
+            })
+            .collect()
+    }
+
+    /// A source where only the G feed works
+    fn g_feed_only() -> FakeSource {
+        let g = feed(vec![trip(
+            "G",
+            "a",
+            &[("G24N", Some(300)), ("T", Some(900))],
+        )]);
+        FakeSource {
+            feeds: HashMap::from([(routes::FEED_G, g)]),
+            ..FakeSource::default()
+        }
+    }
+
+    #[gtest]
+    fn waits_for_wifi_and_a_short_delay_before_fetching() {
+        let mut app = MtaApp::new(capture_fetcher);
+        app.update(&frame(300.0, false));
+        expect_that!(started_count(), eq(0), "not connected");
+
+        let mut app = MtaApp::new(capture_fetcher);
+        app.update(&frame(100.0, true));
+        expect_that!(started_count(), eq(0), "too soon");
+        app.update(&frame(200.0, true));
+        app.update(&frame(16.0, true));
+        expect_that!(started_count(), eq(1), "started exactly once");
+    }
+
+    #[gtest]
+    fn shows_fetched_data_on_the_next_frame() {
+        let mut app = MtaApp::new(capture_fetcher);
+        app.update(&frame(300.0, true));
+        expect_that!(
+            states(&app),
+            elements_are![eq("E Loading"), eq("G Loading"), eq("7 Loading")]
+        );
+
+        let mut source = g_feed_only();
+        run_fetcher(&mut source);
+        app.update(&frame(16.0, true));
+        expect_that!(states(&app), contains(eq("G live(1)")));
+        expect_that!(
+            source.hooks,
+            elements_are![
+                eq(&"publish"),
+                eq(&"parse"),
+                eq(&"publish"),
+                eq(&"publish")
+            ]
+        );
+    }
+
+    #[gtest]
+    fn keeps_stale_data_through_a_few_failures_then_shows_no_data() {
+        let mut app = MtaApp::new(capture_fetcher);
+        app.update(&frame(300.0, true));
+        let mut source = g_feed_only();
+        run_fetcher(&mut source);
+
+        source.feeds.clear();
+        for _ in 0..MAX_STALE_FETCHES {
+            run_fetcher(&mut source);
+        }
+        app.update(&frame(16.0, true));
+        // G has failed 3 times: still showing its last data. E (which also
+        // failed on the first run) has failed 4 times: no data.
+        expect_that!(states(&app), contains(eq("G live(1)")));
+        expect_that!(states(&app), contains(eq("E Unavailable")));
+
+        run_fetcher(&mut source);
+        app.update(&frame(16.0, true));
+        expect_that!(
+            states(&app),
+            elements_are![
+                eq("E Unavailable"),
+                eq("G Unavailable"),
+                eq("7 Unavailable")
+            ]
+        );
+    }
+
+    #[gtest]
+    fn a_success_resets_the_failure_count() {
+        let mut app = MtaApp::new(capture_fetcher);
+        app.update(&frame(300.0, true));
+        let mut failing = FakeSource::default();
+        for _ in 0..MAX_STALE_FETCHES {
+            run_fetcher(&mut failing);
+        }
+        run_fetcher(&mut g_feed_only());
+        for _ in 0..MAX_STALE_FETCHES {
+            run_fetcher(&mut failing);
+        }
+        app.update(&frame(16.0, true));
+        expect_that!(states(&app), contains(eq("G live(1)")));
+    }
+
+    #[gtest]
+    fn progress_hooks_are_optional() {
+        let mut app = MtaApp::new(capture_fetcher);
+        app.update(&frame(300.0, true));
+        run_fetcher(&mut OfflineSource);
+        app.update(&frame(16.0, true));
+        expect_that!(
+            states(&app),
+            elements_are![eq("E NoTrains"), eq("G NoTrains"), eq("7 NoTrains")]
+        );
+    }
+
+    #[gtest]
+    fn rotates_through_stations() {
+        let mut app = MtaApp::new(capture_fetcher);
+        expect_that!(app.current_station().route, eq("E"));
+        app.update(&frame(MIN_STATION_DISPLAY_MS, false));
+        expect_that!(app.current_station().route, eq("G"));
+        app.update(&frame(MIN_STATION_DISPLAY_MS, false));
+        app.update(&frame(MIN_STATION_DISPLAY_MS, false));
+        expect_that!(app.current_station().route, eq("E"), "wraps around");
+    }
+
+    #[gtest]
+    fn waits_for_fresh_data_while_the_fetcher_holds_the_lock() {
+        let mut app = MtaApp::new(capture_fetcher);
+        app.update(&frame(300.0, true));
+        run_fetcher(&mut g_feed_only());
+
+        let shared = Arc::clone(&app.shared);
+        let guard = shared.lock().unwrap();
+        app.update(&frame(16.0, true));
+        expect_that!(states(&app), contains(eq("G Loading")), "didn't block");
+        drop(guard);
+        app.update(&frame(16.0, true));
+        expect_that!(states(&app), contains(eq("G live(1)")));
+    }
+
+    #[gtest]
+    fn draws_the_current_station() {
+        let app = MtaApp::new(capture_fetcher);
+        let mut fb = Framebuffer::new();
+        app.draw(&mut fb);
+        expect_that!(fb.lit_pixels().count(), gt(0));
     }
 }

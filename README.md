@@ -45,11 +45,16 @@ Matrix Hub is a Rust-based, dual-core embedded application designed for the ESP3
 
 ## Project Structure
 
-- `src/`: The core Rust application.
-  - `src/apps/`: Individual applications (MTA, Plasma, Particles, Settings) and the `AppManager`.
-  - `src/display.rs`, `src/buffer.rs`: HUB75 matrix driver bindings and the framebuffer.
-  - `src/input.rs`: Gesture and button handling.
-  - `src/network/`: WiFi, DNS (captive portal), HTTP client and server.
+- `core/`: Hardware-independent, host-tested logic (see [Testing](#testing)).
+  - `core/src/apps/`: The apps (MTA, Plasma, Particles, Settings) and the `AppManager`.
+  - `core/src/apps/mta/`: GTFS-RT feed parsing, routes, and arrival-board rendering.
+  - `core/src/buffer.rs`, `input.rs`, `net/`, `device_config.rs`: Framebuffer pool, gesture/debounce logic, DNS replies and HTTP body handling, config validation.
+- `src/`: The firmware: hardware glue around `core`.
+  - `src/platform.rs`: Safe wrappers around ESP-IDF APIs (the only home of raw FFI).
+  - `src/display.rs`: HUB75 driver binding and the display thread.
+  - `src/input.rs`: Button and accelerometer drivers.
+  - `src/network/`: WiFi manager, captive-portal DNS server, HTTP client and server.
+  - `src/mta.rs`: Feed downloads for the MTA app.
   - `src/diag.rs`: Runtime diagnostics (watchdog, breadcrumbs, coredumps, `/api/debug`).
 - `frontend/`: Preact/Vite web app for device configuration.
 - `proto/`: Protocol Buffer definitions for data exchange.
@@ -68,6 +73,18 @@ Matrix Hub is a Rust-based, dual-core embedded application designed for the ESP3
    cargo run --release
    ```
    This flashes with `partitions.csv` and opens a serial monitor. On WSL, forward the board's USB port from Windows first with [`usbipd`](https://github.com/dorssel/usbipd-win) (`usbipd attach --wsl --busid <id>`).
+
+## Testing
+
+Hardware-independent logic lives in the `core/` crate (apps, MTA feed parsing and rendering, input interpretation, DNS replies, config validation, the frame pool). It builds for both the ESP32-S3 and your PC, and is tested on the PC with [googletest](https://crates.io/crates/googletest):
+
+```bash
+cd core
+cargo test
+cargo llvm-cov --fail-under-lines 100   # CI requires 100% line coverage
+```
+
+The MTA renderer also has golden-image tests (`core/src/apps/mta/render_golden.rs`) that fail if any scenario's pixels change; after an intentional layout change, update the recorded fingerprints (run with `--nocapture` to print them). The firmware crate (`src/`) is the hardware glue around `core`: drivers, WiFi, servers, and diagnostics.
 
 ## Diagnostics
 

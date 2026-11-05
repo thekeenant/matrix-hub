@@ -23,6 +23,16 @@ pub enum StationState {
     Live(Vec<Platform>),
 }
 
+impl StationState {
+    /// The live platforms, or none if there's no live data.
+    pub fn platforms(&self) -> &[Platform] {
+        match self {
+            Self::Live(platforms) => platforms,
+            _ => &[],
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct StationData {
     pub route: String,

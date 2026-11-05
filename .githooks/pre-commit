@@ -7,4 +7,12 @@ cargo fmt --all -- --check
 echo "Running cargo clippy..."
 cargo clippy --all-targets --all-features --workspace -- -D warnings
 
+echo "Checking core crate (fmt, clippy, tests)..."
+(
+    cd core
+    cargo fmt -- --check
+    cargo clippy --all-targets -- -D warnings
+    cargo test --quiet
+)
+
 echo "All checks passed!"

@@ -1,9 +1,12 @@
-// Pixel-perfect port of the v0 MTA rendering pipeline.
-// Uses the same layout constants, clipping logic, scroll behavior, and fonts.
+//! Draws the arrival board: per platform, a route bullet, a scrolling
+//! destination, and right-aligned arrival times.
 
 use embedded_graphics::{
     geometry::{Point, Size},
-    mono_font::{MonoTextStyle, ascii::FONT_7X13},
+    mono_font::{
+        MonoTextStyle,
+        ascii::{FONT_5X8, FONT_7X13},
+    },
     pixelcolor::Rgb888,
     prelude::*,
     primitives::{Circle, PrimitiveStyle, Triangle},
@@ -11,33 +14,55 @@ use embedded_graphics::{
 };
 
 use crate::apps::mta::data::{Platform, StationState, Train};
-use crate::apps::mta::routes::get_destination;
-use crate::apps::mta::routes::get_route_info;
+use crate::apps::mta::routes::{get_destination, get_route_info};
+use crate::apps::mta::stops::get_stop_name;
 use crate::buffer::Framebuffer;
+use crate::config::WIDTH;
 use crate::fonts::{FONT_5X9, FONT_5X9_BOLD, FONT_6X12, FONT_6X12_BOLD};
 
 // ============================================================================
-// Layout Constants — identical to v0
+// Layout
 // ============================================================================
 
 const TRAIN_CIRCLE_RADIUS: i32 = 6;
-pub const TRAIN_CIRCLE_X: i32 = 2; // train circle x position
-const LEFT_TEXT_MARGIN: i32 = 2; // margin between train circle and text
-pub const ROW_HEIGHT: i32 = 16;
-pub const FIRST_ROW_Y: i32 = 11;
-const TIME_SPACING: i32 = 3; // spacing between columns (updated)
+/// Left edge of the route bullet
+const TRAIN_CIRCLE_X: i32 = 2;
+/// Gap between the route bullet and the destination
+const LEFT_TEXT_MARGIN: i32 = 2;
+/// Left edge of the destination text
+const DESTINATION_X: i32 =
+    TRAIN_CIRCLE_X + TRAIN_CIRCLE_RADIUS * 2 + LEFT_TEXT_MARGIN;
+const ROW_HEIGHT: i32 = 16;
+/// Text baseline of the first row
+const FIRST_ROW_Y: i32 = 11;
+/// Gap between the two columns of arrival times
+const TIME_SPACING: i32 = 3;
+/// Gap between the destination and the arrival times
+const RIGHT_MARGIN: i32 = 3;
+/// Glyph widths of FONT_7X13 (destination, big times) and FONT_5X8 (small)
+const CHAR_WIDTH: i32 = 7;
+const SMALL_CHAR_WIDTH: i32 = 5;
+/// Width of the first time column, e.g. "10m"
+const COL1_MAX_W: i32 = 3 * CHAR_WIDTH;
 
-const RIGHT_MARGIN: i32 = 3; // padding between scrolling text and times
-const TIME_CHAR_WIDTH: i32 = 7; // FONT_7X13
-const CHAR_WIDTH: i32 = 7; // FONT_7X13 (character width for destination text)
-// ============================================================================// Scroll State
+const TIME_GRAY: Rgb888 = Rgb888::new(0x55, 0x55, 0x55);
+/// Marks a train going somewhere other than the first train's terminal
+const MARKER_RED: Rgb888 = Rgb888::RED;
+
+// ============================================================================
+// Scrolling
 // ============================================================================
 
 pub const SCROLL_HOLD_START_MS: f32 = 2500.0;
 pub const SCROLL_TIME_PER_PIXEL_MS: f32 = 50.0;
 pub const SCROLL_HOLD_END_MS: f32 = 1000.0;
+/// How long a station is shown when nothing needs scrolling
+const NO_SCROLL_CYCLE_MS: f32 = 5000.0;
 
+/// Destinations too wide to fit hold, scroll left one pixel per
+/// `SCROLL_TIME_PER_PIXEL_MS`, then hold at the end.
 pub struct ScrollState {
+    /// Time since the station came on screen
     pub elapsed_ms: f32,
 }
 
@@ -68,7 +93,7 @@ impl ScrollState {
     /// Total duration of one full scroll cycle in ms (hold → scroll → hold)
     pub fn cycle_ms_for(text_width: i32, available_width: i32) -> f32 {
         if text_width <= available_width {
-            return 5000.0; // no scroll needed, just display time
+            return NO_SCROLL_CYCLE_MS;
         }
         let max_scroll = text_width - available_width;
         SCROLL_TIME_PER_PIXEL_MS
@@ -131,21 +156,9 @@ impl DrawTarget for ClippedFramebuffer<'_> {
 }
 
 impl OriginDimensions for ClippedFramebuffer<'_> {
+    /// The underlying framebuffer's size: clipping happens in `draw_iter`.
     fn size(&self) -> Size {
-        match &self.shape {
-            ClipShape::BoundingBox {
-                left,
-                right,
-                top,
-                bottom,
-            } => Size::new(
-                (right - left).max(0) as u32,
-                (bottom - top).max(0) as u32,
-            ),
-            ClipShape::Diamond { r, .. } => {
-                Size::new((r * 2) as u32, (r * 2) as u32)
-            }
-        }
+        self.target.size()
     }
 }
 
@@ -153,72 +166,68 @@ impl OriginDimensions for ClippedFramebuffer<'_> {
 // Drawing Helpers
 // ============================================================================
 
+/// The route bullet: a circle, or a diamond for express ("X") routes.
 fn draw_train_circle(fb: &mut Framebuffer, route: &str, x: i32, y: i32) {
-    let is_express = route.ends_with('X');
-    let is_diamond = is_express;
-    let display_route = if is_express {
-        &route[..route.len() - 1]
-    } else {
-        route
-    };
-
+    let express_route = route.strip_suffix('X');
+    let display_route = express_route.unwrap_or(route);
     let info = get_route_info(display_route);
     let fill = PrimitiveStyle::with_fill(info.color);
-    let circle_y = y - 9;
     let r = TRAIN_CIRCLE_RADIUS;
+    let top = y - 9;
+    let center = Point::new(x + r, top + r);
 
-    if is_diamond {
-        // Diamond shape for express trains
-        let top = Point::new(x + r, circle_y);
-        let right = Point::new(x + r * 2, circle_y + r);
-        let bottom = Point::new(x + r, circle_y + r * 2);
-        let left = Point::new(x, circle_y + r);
-        let _ = Triangle::new(left, top, right).into_styled(fill).draw(fb);
-        let _ = Triangle::new(left, bottom, right)
-            .into_styled(fill)
-            .draw(fb);
-    } else {
-        let _ = Circle::new(Point::new(x, circle_y), (r as u32) * 2)
-            .into_styled(fill)
-            .draw(fb);
-    }
-
-    let (font, char_width, baseline_adj) = if is_diamond {
-        if info.is_bold {
-            (&FONT_5X9_BOLD, 5, 0) // scaled down from FONT_6X12_BOLD
-        } else {
-            (&FONT_5X9, 5, 0)
+    let (font, char_width, clip) = if express_route.is_some() {
+        let left = Point::new(x, center.y);
+        let right = Point::new(x + 2 * r, center.y);
+        for tip in
+            [Point::new(center.x, top), Point::new(center.x, top + 2 * r)]
+        {
+            let _ = Triangle::new(left, tip, right).into_styled(fill).draw(fb);
         }
-    } else if info.is_bold {
-        (&FONT_6X12_BOLD, 6, 0)
+        let font = if info.is_bold {
+            &FONT_5X9_BOLD
+        } else {
+            &FONT_5X9
+        };
+        (
+            font,
+            5,
+            ClipShape::Diamond {
+                cx: center.x,
+                cy: center.y,
+                r,
+            },
+        )
     } else {
-        (&FONT_6X12, 6, 0)
+        let _ = Circle::new(Point::new(x, top), (2 * r) as u32)
+            .into_styled(fill)
+            .draw(fb);
+        let font = if info.is_bold {
+            &FONT_6X12_BOLD
+        } else {
+            &FONT_6X12
+        };
+        let clip = ClipShape::BoundingBox {
+            left: x,
+            right: x + 2 * r,
+            top,
+            bottom: top + 2 * r,
+        };
+        (font, 6, clip)
     };
-    let letter_style = MonoTextStyle::new(font, info.letter_color);
+
+    // Center the letters on the bullet, clipped to its shape
     let text_width = display_route.len() as i32 * char_width;
-
-    let text_x = x + r - (text_width / 2);
-    let text_y = y + baseline_adj; // baseline
-
     let mut clipped = ClippedFramebuffer {
         target: fb,
-        shape: if is_diamond {
-            ClipShape::Diamond {
-                cx: x + r,
-                cy: circle_y + r,
-                r,
-            }
-        } else {
-            ClipShape::BoundingBox {
-                left: x,
-                right: x + r * 2,
-                top: circle_y,
-                bottom: circle_y + r * 2,
-            }
-        },
+        shape: clip,
     };
-    let _ = Text::new(display_route, Point::new(text_x, text_y), letter_style)
-        .draw(&mut clipped);
+    let _ = Text::new(
+        display_route,
+        Point::new(center.x - text_width / 2, y),
+        MonoTextStyle::new(font, info.letter_color),
+    )
+    .draw(&mut clipped);
 }
 
 pub struct ArrivalTime {
@@ -226,233 +235,195 @@ pub struct ArrivalTime {
     pub has_different_dest: bool,
 }
 
-const COL1_MAX_W: i32 = 3 * TIME_CHAR_WIDTH; // width of first column (e.g. "10m")
-
-fn render_arrival_times(
-    fb: &mut Framebuffer,
-    y_pos: i32,
-    times: &[ArrivalTime],
-) -> i32 {
-    let big_style =
-        MonoTextStyle::new(&FONT_7X13, Rgb888::new(0x55, 0x55, 0x55));
-    let small_style = MonoTextStyle::new(
-        &embedded_graphics::mono_font::ascii::FONT_5X8,
-        Rgb888::new(0x55, 0x55, 0x55),
-    );
-    let display_width = crate::config::WIDTH as i32;
-
-    if times.is_empty() {
-        return display_width;
-    }
-
-    let big_width = |t: &ArrivalTime| t.text.len() as i32 * TIME_CHAR_WIDTH;
-    let small_width = |t: &ArrivalTime| t.text.len() as i32 * 5;
-
-    // Width of the optional second column (either small stacked or a second big time)
-    let col2_max_w = if times.len() >= 3 {
-        small_width(&times[1]).max(small_width(&times[2]))
-    } else if times.len() == 2 {
-        big_width(&times[1])
+/// A red marker at the top right of an arrival time: a 5-pixel cross for big
+/// times, a single pixel for small ones.
+fn draw_marker(fb: &mut Framebuffer, center: Point, big: bool) {
+    let offsets: &[(i32, i32)] = if big {
+        &[(0, -1), (-1, 0), (0, 0), (1, 0), (0, 1)]
     } else {
-        0
+        &[(0, 0)]
     };
-
-    // Total width of the whole time block
-    let total_width = if times.len() > 1 {
-        COL1_MAX_W + TIME_SPACING + col2_max_w
-    } else {
-        COL1_MAX_W
-    };
-
-    // Starting X coordinate (right‑aligned block)
-    let x = display_width - total_width;
-
-    // Draw first train right‑aligned in the first column
-    let t0 = &times[0];
-    let t0_w = big_width(t0);
-    let x0 = x + COL1_MAX_W - t0_w;
-    let _ = Text::new(&t0.text, Point::new(x0, y_pos), big_style).draw(fb);
-    if t0.has_different_dest {
-        let cx = x0 + t0_w - TIME_CHAR_WIDTH + 5;
-        let cy = y_pos - 10;
-        let red = Rgb888::new(0xFF, 0x00, 0x00);
-        let _ = Pixel(Point::new(cx, cy - 1), red).draw(fb);
-        let _ = Pixel(Point::new(cx - 1, cy), red).draw(fb);
-        let _ = Pixel(Point::new(cx, cy), red).draw(fb);
-        let _ = Pixel(Point::new(cx + 1, cy), red).draw(fb);
-        let _ = Pixel(Point::new(cx, cy + 1), red).draw(fb);
+    for &(dx, dy) in offsets {
+        let _ = Pixel(center + Point::new(dx, dy), MARKER_RED).draw(fb);
     }
-
-    // Starting X for column 2
-    let col2_start = x + COL1_MAX_W + TIME_SPACING;
-
-    if times.len() >= 3 {
-        // Draw 2nd and 3rd trains small, stacked
-        let t1 = &times[1];
-        let t2 = &times[2];
-        let max_small_w = small_width(t1).max(small_width(t2));
-
-        // Top mini train
-        let x1 = col2_start + max_small_w - small_width(t1);
-        let _ = Text::new(&t1.text, Point::new(x1, y_pos - 5), small_style)
-            .draw(fb);
-        if t1.has_different_dest {
-            let cx = x1 + small_width(t1) - 5 + 4;
-            let cy = y_pos - 5 - 6;
-            let _ = Pixel(Point::new(cx, cy), Rgb888::new(0xFF, 0x00, 0x00))
-                .draw(fb);
-        }
-
-        // Bottom mini train
-        let x2 = col2_start + max_small_w - small_width(t2);
-        let _ = Text::new(&t2.text, Point::new(x2, y_pos + 3), small_style)
-            .draw(fb);
-        if t2.has_different_dest {
-            let cx = x2 + small_width(t2) - 5 + 4;
-            let cy = y_pos + 3 - 6;
-            let _ = Pixel(Point::new(cx, cy), Rgb888::new(0xFF, 0x00, 0x00))
-                .draw(fb);
-        }
-    } else if times.len() == 2 {
-        // Draw second train big, right‑aligned in column 2
-        let t1 = &times[1];
-        let t1_w = big_width(t1);
-        let x1 = col2_start + col2_max_w - t1_w;
-        let _ = Text::new(&t1.text, Point::new(x1, y_pos), big_style).draw(fb);
-        if t1.has_different_dest {
-            let cx = x1 + t1_w - TIME_CHAR_WIDTH + 5;
-            let cy = y_pos - 10;
-            let red = Rgb888::new(0xFF, 0x00, 0x00);
-            let _ = Pixel(Point::new(cx, cy - 1), red).draw(fb);
-            let _ = Pixel(Point::new(cx - 1, cy), red).draw(fb);
-            let _ = Pixel(Point::new(cx, cy), red).draw(fb);
-            let _ = Pixel(Point::new(cx + 1, cy), red).draw(fb);
-            let _ = Pixel(Point::new(cx, cy + 1), red).draw(fb);
-        }
-    }
-
-    x0
 }
 
+/// Draw one arrival time with its right edge at `right`.
+fn draw_time(
+    fb: &mut Framebuffer,
+    time: &ArrivalTime,
+    right: i32,
+    y: i32,
+    big: bool,
+) {
+    let (font, char_width) = if big {
+        (&FONT_7X13, CHAR_WIDTH)
+    } else {
+        (&FONT_5X8, SMALL_CHAR_WIDTH)
+    };
+    let x = right - time.text.len() as i32 * char_width;
+    let _ = Text::new(
+        &time.text,
+        Point::new(x, y),
+        MonoTextStyle::new(font, TIME_GRAY),
+    )
+    .draw(fb);
+    if time.has_different_dest {
+        let marker = if big {
+            Point::new(right - 2, y - 10)
+        } else {
+            Point::new(right - 1, y - 6)
+        };
+        draw_marker(fb, marker, big);
+    }
+}
+
+/// Draw up to three arrival times right-aligned on the row: the first big,
+/// then either a second big one or two small ones stacked. Returns the left
+/// edge of the first time (the destination must end before it).
+fn render_arrival_times(
+    fb: &mut Framebuffer,
+    y: i32,
+    times: &[ArrivalTime],
+) -> i32 {
+    let display_width = WIDTH as i32;
+    let width =
+        |t: &ArrivalTime, char_width: i32| t.text.len() as i32 * char_width;
+
+    let (first, rest) = match times {
+        [] => return display_width,
+        [first, rest @ ..] => (first, rest),
+    };
+    let col2_width = match rest {
+        [] => 0,
+        [second] => width(second, CHAR_WIDTH),
+        [second, third, ..] => {
+            width(second, SMALL_CHAR_WIDTH).max(width(third, SMALL_CHAR_WIDTH))
+        }
+    };
+    let total_width = if rest.is_empty() {
+        COL1_MAX_W
+    } else {
+        COL1_MAX_W + TIME_SPACING + col2_width
+    };
+
+    let col1_right = display_width - total_width + COL1_MAX_W;
+    draw_time(fb, first, col1_right, y, true);
+
+    let col2_right = col1_right + TIME_SPACING + col2_width;
+    match rest {
+        [] => {}
+        [second] => draw_time(fb, second, col2_right, y, true),
+        [second, third, ..] => {
+            draw_time(fb, second, col2_right, y - 5, false);
+            draw_time(fb, third, col2_right, y + 3, false);
+        }
+    }
+
+    col1_right - width(first, CHAR_WIDTH)
+}
+
+/// The destination, clipped between the route bullet and the times, and
+/// scrolled if it doesn't fit.
 fn render_destination(
     fb: &mut Framebuffer,
-    y_pos: i32,
+    y: i32,
     dest: &str,
-    circle_end: i32,
     clip_right: i32,
     scroll: &ScrollState,
 ) {
-    let style = MonoTextStyle::new(&FONT_7X13, Rgb888::WHITE);
+    // Nothing is drawn if there's no room: the clip box is then empty
+    let available = clip_right - DESTINATION_X;
     let text_width = dest.len() as i32 * CHAR_WIDTH;
-    // Simple available space from circle end to clipping right edge
-    let available = (clip_right - circle_end).max(0);
-    if available <= 0 {
-        return;
-    }
-    let offset = scroll.calculate_offset(text_width, available);
-    let x = circle_end + offset; // position text directly after circle
+    let x = DESTINATION_X + scroll.calculate_offset(text_width, available);
 
-    let x_end = x + text_width;
-
-    if x_end > circle_end && x < clip_right {
-        let mut clipped = ClippedFramebuffer {
-            target: fb,
-            shape: ClipShape::BoundingBox {
-                left: circle_end, // clipping left edge at circle
-                right: clip_right,
-                top: y_pos - 10,
-                bottom: y_pos + 3,
-            },
-        };
-        let _ = Text::new(dest, Point::new(x, y_pos), style).draw(&mut clipped);
-    }
+    let mut clipped = ClippedFramebuffer {
+        target: fb,
+        shape: ClipShape::BoundingBox {
+            left: DESTINATION_X,
+            right: clip_right,
+            top: y - 10,
+            bottom: y + 3,
+        },
+    };
+    let _ = Text::new(
+        dest,
+        Point::new(x, y),
+        MonoTextStyle::new(&FONT_7X13, Rgb888::WHITE),
+    )
+    .draw(&mut clipped);
 }
 
 // ============================================================================
 // Public API
 // ============================================================================
 
-/// Render one row: train circle + scrolling destination + right-aligned arrival times.
-pub fn render_row(
+/// One row: route bullet, scrolling destination, right-aligned times.
+fn render_row(
     fb: &mut Framebuffer,
-    y_pos: i32,
+    y: i32,
     route: &str,
     dest: &str,
     times: &[ArrivalTime],
     scroll: &ScrollState,
 ) {
-    draw_train_circle(fb, route, TRAIN_CIRCLE_X, y_pos);
-    let times_start = render_arrival_times(fb, y_pos, times);
-    let circle_end =
-        TRAIN_CIRCLE_X + TRAIN_CIRCLE_RADIUS * 2 + LEFT_TEXT_MARGIN;
-    let clip_right = times_start - RIGHT_MARGIN; // enforce fixed right margin
-    render_destination(fb, y_pos, dest, circle_end, clip_right, scroll);
+    draw_train_circle(fb, route, TRAIN_CIRCLE_X, y);
+    let times_left = render_arrival_times(fb, y, times);
+    render_destination(fb, y, dest, times_left - RIGHT_MARGIN, scroll);
 }
 
+/// The train's terminal station name, or the route's usual destination in
+/// that direction if the terminal is unknown.
 fn resolve_destination<'a>(train: &Train, direction: &'a str) -> &'a str {
-    // Strip trailing direction N/S for lookup
-    let base_id = if train.terminal_stop_id.ends_with('N')
-        || train.terminal_stop_id.ends_with('S')
-    {
-        &train.terminal_stop_id[..train.terminal_stop_id.len() - 1]
-    } else {
-        &train.terminal_stop_id
-    };
-
-    if !base_id.is_empty() {
-        if let Some(name) = crate::apps::mta::stops::get_stop_name(base_id) {
-            return name;
-        }
-    }
-    get_destination(&train.route, direction)
+    // Platform IDs end in N/S; names are listed under the parent station
+    let terminal = train.terminal_stop_id.as_str();
+    let parent = terminal.strip_suffix(['N', 'S']).unwrap_or(terminal);
+    get_stop_name(parent)
+        .unwrap_or_else(|| get_destination(&train.route, direction))
 }
 
 /// Compute the full scroll cycle duration in ms for a given station's platforms.
 pub fn compute_cycle_ms(platforms: &[Platform]) -> f32 {
-    let display_width = crate::config::WIDTH as i32;
-    let mut max: f32 = 5000.0;
+    // Estimate the times as two "10m" columns
+    let times_width = 2 * (COL1_MAX_W + TIME_SPACING);
+    let available = WIDTH as i32 - DESTINATION_X - RIGHT_MARGIN - times_width;
 
-    for platform in platforms {
-        if let Some(first) = platform.trains.first() {
-            let dest = resolve_destination(first, &platform.direction);
-            let text_w = dest.len() as i32 * CHAR_WIDTH;
-            let times_w = 2 * (3 * TIME_CHAR_WIDTH + TIME_SPACING); // estimate "10m 5m"
-            let avail = display_width
-                - (TRAIN_CIRCLE_X
-                    + TRAIN_CIRCLE_RADIUS * 2
-                    + LEFT_TEXT_MARGIN
-                    + RIGHT_MARGIN)
-                - times_w;
-            let cycle = ScrollState::cycle_ms_for(text_w, avail);
-            if cycle > max {
-                max = cycle;
-            }
-        }
-    }
-
-    max
+    platforms
+        .iter()
+        .filter_map(|p| {
+            Some(resolve_destination(p.trains.first()?, &p.direction))
+        })
+        .map(|dest| {
+            ScrollState::cycle_ms_for(dest.len() as i32 * CHAR_WIDTH, available)
+        })
+        .fold(NO_SCROLL_CYCLE_MS, f32::max)
 }
 
-/// Build arrival time strings and accurately compare final destinations using API `stop_ids`
-pub fn arrival_times(platform: &Platform, max: usize) -> Vec<ArrivalTime> {
-    if platform.trains.is_empty() {
-        return vec![];
-    }
-    let primary_terminal = &platform.trains[0].terminal_stop_id;
-
-    platform
-        .trains
+/// Labels for the first `max` trains, marking trains bound for a different
+/// terminal than the first one.
+fn arrival_times(trains: &[Train], max: usize) -> Vec<ArrivalTime> {
+    let primary_terminal = trains.first().map(|t| t.terminal_stop_id.as_str());
+    trains
         .iter()
         .take(max)
         .map(|t| ArrivalTime {
             text: format!("{}m", t.arrives_in_secs / 60),
             has_different_dest: !t.terminal_stop_id.is_empty()
-                && t.terminal_stop_id != *primary_terminal,
+                && Some(t.terminal_stop_id.as_str()) != primary_terminal,
         })
         .collect()
 }
 
-/// Render a station's live data.
+fn message_row(
+    fb: &mut Framebuffer,
+    route: &str,
+    message: &str,
+    scroll: &ScrollState,
+) {
+    render_row(fb, FIRST_ROW_Y, route, message, &[], scroll);
+}
+
+/// Draw a station: up to two platforms, or a status message.
 pub fn render_station(
     fb: &mut Framebuffer,
     state: &StationState,
@@ -460,26 +431,98 @@ pub fn render_station(
     scroll: &ScrollState,
 ) {
     match state {
-        StationState::Loading => {
-            // Just show route name + "Loading..."
-            render_row(fb, FIRST_ROW_Y, route, "Loading...", &[], scroll);
-        }
-        StationState::NoTrains => {
-            render_row(fb, FIRST_ROW_Y, route, "No Trains", &[], scroll);
-        }
-        StationState::Unavailable => {
-            render_row(fb, FIRST_ROW_Y, route, "No data", &[], scroll);
-        }
+        StationState::Loading => message_row(fb, route, "Loading...", scroll),
+        StationState::NoTrains => message_row(fb, route, "No Trains", scroll),
+        StationState::Unavailable => message_row(fb, route, "No data", scroll),
         StationState::Live(platforms) => {
             for (i, platform) in platforms.iter().enumerate().take(2) {
                 if let Some(first_train) = platform.trains.first() {
                     let dest =
                         resolve_destination(first_train, &platform.direction);
-                    let times = arrival_times(platform, 3);
+                    let times = arrival_times(&platform.trains, 3);
                     let y = FIRST_ROW_Y + i as i32 * ROW_HEIGHT;
                     render_row(fb, y, &first_train.route, dest, &times, scroll);
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use googletest::prelude::*;
+
+    fn offset_at(elapsed_ms: f32, text_width: i32, available: i32) -> i32 {
+        ScrollState { elapsed_ms }.calculate_offset(text_width, available)
+    }
+
+    #[gtest]
+    fn text_that_fits_never_scrolls() {
+        expect_that!(offset_at(99_999.0, 50, 50), eq(0));
+        expect_that!(ScrollState::cycle_ms_for(50, 80), eq(NO_SCROLL_CYCLE_MS));
+    }
+
+    #[gtest]
+    fn long_text_holds_scrolls_then_holds_at_the_end() {
+        // 20px too wide: hold 2.5s, scroll 20px at 50ms/px, then stay
+        expect_that!(offset_at(2_499.0, 120, 100), eq(0));
+        expect_that!(offset_at(2_500.0 + 10.0 * 50.0, 120, 100), eq(-10));
+        expect_that!(offset_at(2_500.0 + 25.0 * 50.0, 120, 100), eq(-20));
+        expect_that!(
+            ScrollState::cycle_ms_for(120, 100),
+            eq(SCROLL_HOLD_START_MS
+                + 20.0 * SCROLL_TIME_PER_PIXEL_MS
+                + SCROLL_HOLD_END_MS)
+        );
+    }
+
+    fn platform(direction: &str, terminal: &str) -> Platform {
+        Platform {
+            direction: direction.into(),
+            trains: vec![Train {
+                route: "A".into(),
+                arrives_in_secs: 60,
+                terminal_stop_id: terminal.into(),
+            }],
+        }
+    }
+
+    #[gtest]
+    fn station_cycle_lasts_as_long_as_its_longest_scroll() {
+        let short = platform("N", "A02N"); // "Inwood-207 St" fits
+        let long = platform("S", "H11S"); // "Far Rockaway-Mott Av" scrolls
+        let empty = Platform {
+            direction: "N".into(),
+            trains: vec![],
+        };
+
+        expect_that!(compute_cycle_ms(&[]), eq(NO_SCROLL_CYCLE_MS));
+        expect_that!(
+            compute_cycle_ms(&[short.clone(), empty]),
+            eq(NO_SCROLL_CYCLE_MS)
+        );
+        expect_that!(compute_cycle_ms(&[short, long]), gt(NO_SCROLL_CYCLE_MS));
+    }
+
+    #[gtest]
+    fn clipped_drawing_reports_the_full_framebuffer_size() {
+        let mut fb = Framebuffer::new();
+        let clipped = ClippedFramebuffer {
+            target: &mut fb,
+            shape: ClipShape::Diamond { cx: 5, cy: 5, r: 2 },
+        };
+        expect_that!(clipped.size(), eq(Size::new(WIDTH, 32)));
+    }
+
+    #[gtest]
+    fn only_live_states_have_platforms() {
+        expect_that!(StationState::NoTrains.platforms().len(), eq(0));
+        expect_that!(
+            StationState::Live(vec![platform("N", "")])
+                .platforms()
+                .len(),
+            eq(1)
+        );
     }
 }

@@ -123,3 +123,96 @@ impl App for ParticleApp {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::Accel;
+    use crate::net::NetworkStatus;
+    use googletest::prelude::*;
+
+    fn run(app: &mut ParticleApp, accel: Accel, frames: usize) {
+        let frame = Frame {
+            dt_ms: 16.0,
+            network: NetworkStatus::Connecting,
+            accel,
+        };
+        for _ in 0..frames {
+            app.update(&frame);
+        }
+    }
+
+    fn mean_x(app: &ParticleApp) -> f32 {
+        app.particles.iter().map(|p| p.x).sum::<f32>() / NUM_PARTICLES as f32
+    }
+
+    fn mean_y(app: &ParticleApp) -> f32 {
+        app.particles.iter().map(|p| p.y).sum::<f32>() / NUM_PARTICLES as f32
+    }
+
+    #[gtest]
+    fn particles_settle_where_gravity_pulls_them() {
+        let mut app = ParticleApp::with_seed(1);
+        run(&mut app, Accel::default(), 300);
+        expect_that!(mean_y(&app), gt(H - 6.0), "on the floor");
+
+        run(
+            &mut app,
+            Accel {
+                x: 2.0,
+                ..Accel::default()
+            },
+            300,
+        );
+        expect_that!(mean_x(&app), lt(4.0), "rolled to the left wall");
+
+        run(
+            &mut app,
+            Accel {
+                x: -2.0,
+                ..Accel::default()
+            },
+            300,
+        );
+        expect_that!(mean_x(&app), gt(W - 6.0), "rolled to the right wall");
+
+        run(
+            &mut app,
+            Accel {
+                y: -2.0,
+                ..Accel::default()
+            },
+            300,
+        );
+        expect_that!(mean_y(&app), lt(4.0), "upside down: on the ceiling");
+    }
+
+    #[gtest]
+    fn particles_stay_on_screen() {
+        let mut app = ParticleApp::new();
+        run(
+            &mut app,
+            Accel {
+                x: 3.0,
+                y: 3.0,
+                z: 0.0,
+            },
+            100,
+        );
+        for p in &app.particles {
+            expect_that!(p.x, ge(0.0));
+            expect_that!(p.x, le(W - 2.0));
+            expect_that!(p.y, ge(0.0));
+            expect_that!(p.y, le(H - 2.0));
+        }
+    }
+
+    #[gtest]
+    fn draws_every_particle() {
+        let app = ParticleApp::default();
+        let mut fb = Framebuffer::new();
+        app.draw(&mut fb);
+        // Particles may overlap, but most are visible
+        expect_that!(fb.lit_pixels().count(), gt(NUM_PARTICLES));
+    }
+}

@@ -176,3 +176,150 @@ impl AppManager {
         .draw(fb);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::Accel;
+    use crate::net::NetworkStatus;
+    use googletest::prelude::*;
+    use std::cell::Cell;
+
+    thread_local! {
+        static BUILT: Cell<usize> = const { Cell::new(0) };
+        static LAST_DT: Cell<f32> = const { Cell::new(0.0) };
+    }
+
+    /// Lights one pixel at (id, 0), so tests can tell which app is active.
+    struct Marker(u32);
+
+    impl App for Marker {
+        fn update(&mut self, frame: &Frame) {
+            LAST_DT.set(frame.dt_ms);
+        }
+        fn draw(&self, fb: &mut Framebuffer) {
+            fb.pixels[Framebuffer::index(self.0, 0)] = Rgb888::WHITE;
+        }
+    }
+
+    fn marker<const ID: u32>() -> Box<dyn App> {
+        BUILT.set(BUILT.get() + 1);
+        Box::new(Marker(ID))
+    }
+
+    fn manager() -> AppManager {
+        AppManager::new(vec![marker::<10>, marker::<20>, marker::<30>])
+    }
+
+    fn frame(dt_ms: f32) -> Frame {
+        Frame {
+            dt_ms,
+            network: NetworkStatus::Connecting,
+            accel: Accel::default(),
+        }
+    }
+
+    /// The marker app currently shown, after the transition has faded
+    fn active(apps: &mut AppManager) -> u32 {
+        apps.update(&frame(TRANSITION_MS));
+        let mut fb = Framebuffer::new();
+        apps.draw(&mut fb);
+        (0..WIDTH)
+            .find(|&x| fb.pixels[Framebuffer::index(x, 0)] == Rgb888::WHITE)
+            .unwrap_or(u32::MAX)
+    }
+
+    #[gtest]
+    fn starts_on_the_first_app_and_wraps_both_ways() {
+        let mut apps = manager();
+        expect_that!(active(&mut apps), eq(10));
+        apps.handle(InputEvent::Previous);
+        expect_that!(active(&mut apps), eq(30));
+        apps.handle(InputEvent::Next);
+        apps.handle(InputEvent::Next);
+        expect_that!(active(&mut apps), eq(20));
+    }
+
+    #[gtest]
+    fn switching_builds_a_fresh_app() {
+        let mut apps = manager();
+        let before = BUILT.get();
+        apps.handle(InputEvent::Next);
+        expect_that!(BUILT.get(), eq(before + 1));
+    }
+
+    #[gtest]
+    fn forwards_frames_to_the_active_app() {
+        let mut apps = manager();
+        apps.update(&frame(16.0));
+        expect_that!(LAST_DT.get(), eq(16.0));
+    }
+
+    #[gtest]
+    #[should_panic(expected = "at least one app")]
+    fn needs_an_app() {
+        let _ = AppManager::new(vec![]);
+    }
+
+    /// How much the overlay brightened the given column's blue channel
+    fn blue_at(apps: &AppManager, x: u32) -> u8 {
+        let mut fb = Framebuffer::new();
+        apps.draw(&mut fb);
+        fb.pixels[Framebuffer::index(x, HEIGHT - 1)].b()
+    }
+
+    #[gtest]
+    fn switching_flashes_the_edge_swiped_toward_then_fades() {
+        let mut apps = manager();
+        apps.handle(InputEvent::Next);
+        expect_that!(blue_at(&apps, WIDTH - 1), eq(255), "right edge, full");
+        expect_that!(blue_at(&apps, 0), eq(0), "left edge untouched");
+
+        apps.update(&frame(TRANSITION_MS / 2.0));
+        expect_that!(blue_at(&apps, WIDTH - 1), eq(127), "half faded");
+
+        apps.handle(InputEvent::Previous);
+        expect_that!(blue_at(&apps, 0), eq(255), "left edge");
+        expect_that!(blue_at(&apps, WIDTH - 1), eq(0));
+
+        apps.update(&frame(TRANSITION_MS));
+        expect_that!(blue_at(&apps, 0), eq(0), "faded out");
+    }
+
+    fn arrow_pixels(apps: &AppManager, x_range: std::ops::Range<u32>) -> usize {
+        let mut fb = Framebuffer::new();
+        apps.draw(&mut fb);
+        x_range
+            // Row 0 holds the marker apps' pixels; the arrow is mid-height
+            .flat_map(|x| (1..HEIGHT).map(move |y| (x, y)))
+            .filter(|&(x, y)| fb.pixels[Framebuffer::index(x, y)].g() > 0)
+            .count()
+    }
+
+    #[gtest]
+    fn tilting_shows_an_arrow_on_that_side_until_released() {
+        let mut apps = manager();
+        apps.update(&frame(TRANSITION_MS));
+        let left = 0..16;
+        let right = WIDTH - 16..WIDTH;
+
+        apps.handle(InputEvent::Tilt(1.0));
+        apps.update(&frame(ARROW_FADE_MS));
+        expect_that!(arrow_pixels(&apps, right.clone()), gt(0));
+        expect_that!(arrow_pixels(&apps, left.clone()), eq(0));
+
+        apps.handle(InputEvent::Tilt(-1.0));
+        apps.handle(InputEvent::Tilt(-1.0));
+        apps.update(&frame(ARROW_FADE_MS));
+        expect_that!(arrow_pixels(&apps, left.clone()), gt(0));
+
+        // Without tilt events the tilt decays and the arrow fades out
+        for _ in 0..10 {
+            apps.update(&frame(ARROW_FADE_MS));
+        }
+        expect_that!(
+            arrow_pixels(&apps, left) + arrow_pixels(&apps, right),
+            eq(0)
+        );
+    }
+}

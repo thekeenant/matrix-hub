@@ -160,3 +160,49 @@ pub fn get_destination<'a>(route: &str, direction: &'a str) -> &'a str {
             |(_, _, dest)| *dest,
         )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use googletest::prelude::*;
+
+    #[gtest]
+    fn routes_map_to_their_trunk_line_colors_and_feeds() {
+        let cases = [
+            ("1", 0x8C0C0C, FEED_DEFAULT),
+            ("5", 0x006B39, FEED_DEFAULT),
+            ("7X", 0x6A1A72, FEED_DEFAULT),
+            ("E", 0x002D72, FEED_ACE),
+            ("F", 0xCC3300, FEED_BDFM),
+            ("G", 0x008C00, FEED_G),
+            ("L", 0x303030, FEED_L),
+            ("Q", 0x987806, FEED_NQRW),
+            ("Z", 0x402A15, FEED_JZ),
+            ("unknown", 0x202020, FEED_DEFAULT),
+        ];
+        for (route, rgb, feed) in cases {
+            let info = get_route_info(route);
+            let [_, r, g, b] = u32::to_be_bytes(rgb);
+            expect_that!(info.color, eq(Rgb888::new(r, g, b)), "route {route}");
+            expect_that!(info.feed_url, eq(feed), "route {route}");
+        }
+    }
+
+    #[gtest]
+    fn yellow_lines_use_black_regular_lettering() {
+        let n = get_route_info("N");
+        expect_that!(n.letter_color, eq(Rgb888::BLACK));
+        expect_false!(n.is_bold);
+        let a = get_route_info("A");
+        expect_that!(a.letter_color, eq(Rgb888::WHITE));
+        expect_true!(a.is_bold);
+    }
+
+    #[gtest]
+    fn destinations_fall_back_to_shuttle_or_the_direction() {
+        expect_that!(get_destination("G", "N"), eq("Court Sq"));
+        expect_that!(get_destination("J", "W"), eq("Broad St"));
+        expect_that!(get_destination("S", "N"), eq("Shuttle"));
+        expect_that!(get_destination("G", "E"), eq("E"));
+    }
+}

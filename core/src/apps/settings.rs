@@ -125,3 +125,73 @@ impl App for SettingsApp {
             .draw(fb);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::Accel;
+    use googletest::prelude::*;
+
+    fn render(network: NetworkStatus, dt_ms: f32) -> Framebuffer {
+        let mut app = SettingsApp::new("Setup-AP");
+        app.update(&Frame {
+            dt_ms,
+            network,
+            accel: Accel::default(),
+        });
+        let mut fb = Framebuffer::new();
+        app.draw(&mut fb);
+        fb
+    }
+
+    /// The border color (top-left corner pixel)
+    fn border(fb: &Framebuffer) -> Rgb888 {
+        fb.pixels[0]
+    }
+
+    fn text_pixels(fb: &Framebuffer, color: Rgb888) -> usize {
+        fb.pixels.iter().filter(|&&p| p == color).count()
+    }
+
+    const IP: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 154);
+    /// A moment where the border pulse is clearly visible
+    const PULSE_MS: f32 = 150.0;
+
+    #[gtest]
+    fn connected_shows_the_ip_with_a_green_border() {
+        let fb = render(NetworkStatus::Connected(IP), PULSE_MS);
+        let b = border(&fb);
+        expect_that!((b.r(), b.b()), eq((0, 0)));
+        expect_that!(b.g(), gt(0));
+        expect_that!(text_pixels(&fb, Rgb888::WHITE), gt(0), "title");
+        expect_that!(text_pixels(&fb, Rgb888::CYAN), gt(0), "ip");
+    }
+
+    #[gtest]
+    fn setup_mode_scrolls_instructions_with_a_red_border() {
+        let fb = render(NetworkStatus::SetupAccessPoint(IP), PULSE_MS);
+        let b = border(&fb);
+        expect_that!((b.g(), b.b()), eq((0, 0)));
+        expect_that!(b.r(), gt(0));
+        expect_that!(text_pixels(&fb, WARNING_YELLOW), gt(0), "warning icon");
+        expect_that!(text_pixels(&fb, Rgb888::WHITE), eq(0), "no title");
+
+        // The instructions scroll in from the right over time
+        let later = render(NetworkStatus::SetupAccessPoint(IP), 5_000.0);
+        expect_that!(text_pixels(&later, Rgb888::CYAN), gt(0));
+    }
+
+    #[gtest]
+    fn connecting_animates_dots_with_an_orange_border() {
+        let fb = render(NetworkStatus::Connecting, PULSE_MS);
+        let b = border(&fb);
+        expect_that!(b.r(), gt(b.g()));
+        expect_that!(b.g(), gt(0));
+
+        let dots = |dt| {
+            text_pixels(&render(NetworkStatus::Connecting, dt), Rgb888::CYAN)
+        };
+        // "Connecting" + 0..3 dots, one more every 100ms
+        expect_that!(dots(0.0), lt(dots(PULSE_MS)));
+    }
+}

@@ -65,3 +65,31 @@ impl App for PlasmaApp {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::Accel;
+    use crate::net::NetworkStatus;
+    use googletest::prelude::*;
+
+    fn render(app: &PlasmaApp) -> Framebuffer {
+        let mut fb = Framebuffer::new();
+        app.draw(&mut fb);
+        fb
+    }
+
+    #[gtest]
+    fn fills_every_pixel_and_animates() {
+        let mut app = PlasmaApp::default();
+        let first = render(&app);
+        expect_that!(first.lit_pixels().count(), eq(Framebuffer::LEN));
+
+        app.update(&Frame {
+            dt_ms: 100.0,
+            network: NetworkStatus::Connecting,
+            accel: Accel::default(),
+        });
+        expect_that!(render(&app).pixels, not(eq(&first.pixels)));
+    }
+}

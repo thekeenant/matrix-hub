@@ -3,11 +3,10 @@
 
 use crate::config::{HEIGHT, WIDTH};
 use embedded_graphics::{pixelcolor::Rgb888, prelude::*};
-use std::sync::mpsc::{
-    self, Receiver, RecvTimeoutError, SyncSender, TrySendError,
-};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::time::Duration;
 
+#[derive(Debug)]
 pub struct Framebuffer {
     pub pixels: Vec<Rgb888>,
 }
@@ -101,11 +100,7 @@ pub fn frame_pool(size: usize) -> (FrameProducer, FrameConsumer) {
         let _ = free_tx.send(Box::new(Framebuffer::new()));
     }
     (
-        FrameProducer {
-            free_rx,
-            free_tx: free_tx.clone(),
-            ready_tx,
-        },
+        FrameProducer { free_rx, ready_tx },
         FrameConsumer { ready_rx, free_tx },
     )
 }
@@ -113,7 +108,6 @@ pub fn frame_pool(size: usize) -> (FrameProducer, FrameConsumer) {
 /// The drawing side of the frame pool.
 pub struct FrameProducer {
     free_rx: Receiver<Box<Framebuffer>>,
-    free_tx: SyncSender<Box<Framebuffer>>,
     ready_tx: SyncSender<Box<Framebuffer>>,
 }
 
@@ -126,12 +120,11 @@ impl FrameProducer {
         Some(frame)
     }
 
-    /// Queue a drawn frame for display. If the display is behind, the frame
-    /// is dropped and its buffer goes straight back into the pool.
+    /// Queue a drawn frame for display. This can't block: the queue has room
+    /// for every buffer in the pool. (When the display falls behind, the
+    /// pool runs dry and `acquire` returns `None` instead.)
     pub fn submit(&self, frame: Box<Framebuffer>) {
-        if let Err(TrySendError::Full(frame)) = self.ready_tx.try_send(frame) {
-            let _ = self.free_tx.try_send(frame);
-        }
+        let _ = self.ready_tx.try_send(frame);
     }
 }
 
@@ -153,5 +146,89 @@ impl FrameConsumer {
     /// Return a shown frame's buffer to the pool.
     pub fn release(&self, frame: Box<Framebuffer>) {
         let _ = self.free_tx.try_send(frame);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use googletest::prelude::*;
+
+    const RED: Rgb888 = Rgb888::RED;
+
+    #[gtest]
+    fn draws_in_bounds_pixels_and_clips_the_rest() {
+        let mut fb = Framebuffer::default();
+        let pixels = [
+            Pixel(Point::new(0, 0), RED),
+            Pixel(Point::new(127, 31), RED),
+            Pixel(Point::new(-1, 0), RED),
+            Pixel(Point::new(0, -1), RED),
+            Pixel(Point::new(128, 0), RED),
+            Pixel(Point::new(0, 32), RED),
+        ];
+        fb.draw_iter(pixels).unwrap();
+
+        expect_that!(
+            fb.lit_pixels().collect::<Vec<_>>(),
+            elements_are![
+                eq(&Pixel(Point::new(0, 0), RED)),
+                eq(&Pixel(Point::new(127, 31), RED)),
+            ]
+        );
+        expect_that!(fb.size(), eq(Size::new(WIDTH, HEIGHT)));
+    }
+
+    #[gtest]
+    fn clear_turns_every_pixel_off() {
+        let mut fb = Framebuffer::new();
+        fb.pixels[Framebuffer::index(5, 5)] = RED;
+        fb.clear();
+        expect_that!(fb.lit_pixels().count(), eq(0));
+    }
+
+    #[gtest]
+    fn reserves_past_the_internal_ram_threshold() {
+        let fb = Framebuffer::new();
+        expect_that!(fb.pixels.len(), eq(Framebuffer::LEN));
+        expect_that!(fb.pixels.capacity() * size_of::<Rgb888>(), gt(16 * 1024));
+    }
+
+    #[gtest]
+    fn frames_circulate_through_a_fixed_pool() {
+        let (producer, consumer) = frame_pool(2);
+        let timeout = Duration::from_millis(10);
+
+        let mut a = producer.acquire().unwrap();
+        a.pixels[0] = RED;
+        producer.submit(a);
+        let _b = producer.acquire().unwrap();
+        expect_that!(producer.acquire(), none(), "pool exhausted");
+
+        let shown = consumer.recv_timeout(timeout).unwrap();
+        expect_that!(shown.pixels[0], eq(RED));
+        consumer.release(shown);
+        expect_that!(
+            producer.acquire().map(|fb| fb.lit_pixels().count()),
+            some(eq(0)),
+            "recycled buffers come back cleared"
+        );
+        expect_that!(
+            consumer.recv_timeout(timeout),
+            err(eq(&RecvTimeoutError::Timeout))
+        );
+    }
+
+    #[gtest]
+    fn frames_are_skipped_while_the_display_is_behind() {
+        let (producer, consumer) = frame_pool(2);
+        let (a, b) = (producer.acquire().unwrap(), producer.acquire().unwrap());
+        producer.submit(a);
+        producer.submit(b);
+        // Both buffers are queued for display: no buffer to draw into...
+        expect_that!(producer.acquire(), none());
+        // ...until the display releases one
+        consumer.release(consumer.recv_timeout(Duration::ZERO).unwrap());
+        expect_that!(producer.acquire(), some(anything()));
     }
 }

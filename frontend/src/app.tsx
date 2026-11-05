@@ -59,7 +59,7 @@ export function App() {
       });
 
       if (!response.ok) throw new Error('Failed to save config');
-      showToast(`${isWifi ? 'WiFi' : 'Brightness'} settings saved!`, 'success');
+      showToast(`${isWifi ? 'WiFi' : 'Display'} settings saved!`, 'success');
     } catch (err) {
       console.error(err);
       showToast('Error saving settings. Please try again.', 'error');
@@ -118,11 +118,11 @@ export function App() {
       <form onSubmit={(e) => { e.preventDefault(); savePartialConfig(['brightness', 'min_minutes'], false); }}>
         <h2 style={{ fontSize: '1.2rem', marginTop: 0, marginBottom: '16px', color: '#38bdf8' }}>Display</h2>
         <div class="form-group">
-          <label htmlFor="brightness">Global Brightness (0-255)</label>
+          <label htmlFor="brightness">Global Brightness (1-255)</label>
           <input
             id="brightness"
             type="number"
-            min="0"
+            min="1"
             max="255"
             value={config.brightness}
             onInput={(e) => setConfig({ ...config, brightness: parseInt((e.target as HTMLInputElement).value) || 0 })}

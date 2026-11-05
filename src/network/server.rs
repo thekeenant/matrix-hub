@@ -5,6 +5,12 @@ use esp_idf_svc::io::Write;
 
 use log::info;
 
+/// A config update is a few dozen bytes of protobuf
+const MAX_CONFIG_BODY_BYTES: usize = 1024;
+
+/// Upper bound for the "minimum minutes" train filter (matches the frontend)
+const MAX_MIN_MINUTES: u32 = 60;
+
 pub fn start_server(
     credentials_tx: std::sync::mpsc::Sender<(String, String)>,
 ) -> Result<EspHttpServer<'static>> {
@@ -72,12 +78,26 @@ pub fn start_server(
 
     server.fn_handler("/api/config", Method::Post, move |mut request| {
         use buffa::Message;
-        let mut buf = vec![0; 1024];
-        let bytes_read = request.read(&mut buf).unwrap_or(0);
-        let mut slice = &buf[..bytes_read];
+
+        // Read the whole body: a single read() can return only part of it.
+        let mut body = Vec::new();
+        let mut buf = [0u8; 256];
+        loop {
+            let n = request.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            if body.len() + n > MAX_CONFIG_BODY_BYTES {
+                request
+                    .into_status_response(413)?
+                    .write_all(b"Request too large")?;
+                return Ok::<(), anyhow::Error>(());
+            }
+            body.extend_from_slice(&buf[..n]);
+        }
 
         let Ok(update_req) =
-            crate::proto::config::UpdateConfigRequest::decode(&mut slice)
+            crate::proto::config::UpdateConfigRequest::decode(&mut &body[..])
         else {
             request
                 .into_status_response(400)?
@@ -90,31 +110,48 @@ pub fn start_server(
             return Ok::<(), anyhow::Error>(());
         };
 
-        let update_wifi = update_req.update_mask.contains(&"wifi".to_string());
-        let update_brightness =
-            update_req.update_mask.contains(&"brightness".to_string());
-        let update_min_minutes =
-            update_req.update_mask.contains(&"min_minutes".to_string());
+        // An empty mask means "update everything"
+        let mask = &update_req.update_mask;
+        let wants =
+            |field: &str| mask.is_empty() || mask.iter().any(|m| m == field);
+        let update_wifi = wants("wifi");
+        let update_brightness = wants("brightness");
+        let update_min_minutes = wants("min_minutes");
+
+        if update_wifi {
+            // Reject here rather than accepting credentials that
+            // connect_wifi() will later fail on.
+            let ssid_len = new_config.wifi.ssid.len();
+            let pass_len = new_config.wifi.pass.len();
+            if ssid_len == 0 || ssid_len > 32 || pass_len > 64 {
+                request.into_status_response(400)?.write_all(
+                    b"SSID must be 1-32 bytes and password at most 64 bytes",
+                )?;
+                return Ok::<(), anyhow::Error>(());
+            }
+        }
 
         if let Err(e) = crate::storage::update_config(|config| {
-            if update_wifi || update_req.update_mask.is_empty() {
+            if update_wifi {
                 config.wifi = new_config.wifi.clone();
             }
-            if update_brightness || update_req.update_mask.is_empty() {
-                config.brightness = new_config.brightness;
+            if update_brightness {
+                // Stored as u32 but used as u8; 0 means "unset" on load
+                config.brightness = new_config.brightness.clamp(1, 255);
             }
-            if update_min_minutes || update_req.update_mask.is_empty() {
-                config.min_minutes = new_config.min_minutes;
+            if update_min_minutes {
+                config.min_minutes =
+                    new_config.min_minutes.map(|m| m.min(MAX_MIN_MINUTES));
             }
         }) {
             request
                 .into_status_response(500)?
-                .write_all(format!("Failed to save: {:?}", e).as_bytes())?;
+                .write_all(format!("Failed to save: {e:?}").as_bytes())?;
             return Ok::<(), anyhow::Error>(());
         }
 
-        // If WiFi was updated, tell the background task to attempt reconnection
-        if update_wifi || update_req.update_mask.is_empty() {
+        // If WiFi was updated, tell the main loop to reconnect
+        if update_wifi {
             info!("WiFi credentials updated. Sending update event...");
             let _ = credentials_tx.send((
                 new_config.wifi.ssid.clone(),

@@ -203,6 +203,8 @@ fn fetch_all_stations(shared: &Arc<Mutex<(bool, Vec<StationData>)>>) {
 
         diag::inc(Crumb::FetchStarted);
         let started_ms = diag::uptime_ms();
+        diag::stage(Crumb::WorkerStage, Stage::HttpConnect);
+        diag::maybe_test_hang_worker();
 
         let station = match http::fetch_binary(feed_url) {
             Ok(data) => {

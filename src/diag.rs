@@ -29,6 +29,8 @@ pub enum Crumb {
     DisplayFrames,
     DisplayStage,
     WorkerStage,
+    /// Uptime (s) when `WorkerStage` last changed
+    WorkerStageSinceS,
     FetchStarted,
     FetchOk,
     FetchErr,
@@ -44,7 +46,7 @@ pub enum Crumb {
     MinLargestPsram,
 }
 
-const CRUMB_COUNT: usize = 20;
+const CRUMB_COUNT: usize = 21;
 
 const CRUMB_NAMES: [&str; CRUMB_COUNT] = [
     "boot_count",
@@ -54,6 +56,7 @@ const CRUMB_NAMES: [&str; CRUMB_COUNT] = [
     "display_frames",
     "display_stage",
     "worker_stage",
+    "worker_stage_since_s",
     "fetch_started",
     "fetch_ok",
     "fetch_err",
@@ -125,7 +128,14 @@ const STAGE_NAMES: [&str; 19] = [
     "publish",
 ];
 
-const MAGIC: u32 = 0xD1A6_0001;
+/// Marks the `.noinit` crumbs as valid. Includes the crumb count so a
+/// firmware with a different layout doesn't misread the previous one's.
+const MAGIC: u32 = 0xD1A6_0000 | CRUMB_COUNT as u32;
+
+/// A worker stuck mid-fetch this long is considered hung. Fetches normally
+/// take a few seconds, and ESP-IDF's HTTP client times out individual
+/// operations after 5s, so this only trips on a genuine hang.
+const WORKER_STUCK_S: u32 = 300;
 
 #[allow(
     clippy::declare_interior_mutable_const,
@@ -153,6 +163,10 @@ pub fn set(c: Crumb, v: u32) {
     slot(c).store(v, Ordering::Relaxed);
 }
 
+pub fn get(c: Crumb) -> u32 {
+    slot(c).load(Ordering::Relaxed)
+}
+
 pub fn inc(c: Crumb) {
     slot(c).fetch_add(1, Ordering::Relaxed);
 }
@@ -173,6 +187,9 @@ pub fn set_min(c: Crumb, v: u32) {
 }
 
 pub fn stage(c: Crumb, s: Stage) {
+    if matches!(c, Crumb::WorkerStage) {
+        set(Crumb::WorkerStageSinceS, uptime_s());
+    }
     set(c, s as u32);
 }
 
@@ -235,14 +252,32 @@ pub fn init_boot() {
     init_coredump();
 }
 
-/// Call about once per second: tracks uptime and heap low-water marks.
+/// Call about once per second from the main loop: tracks uptime and heap
+/// low-water marks, and checks the background worker for hangs.
 pub fn tick_1s() {
+    check_worker();
+
     set(Crumb::UptimeS, uptime_s());
     let h = heap_stats();
     set_min(Crumb::MinFreeInternal, h.internal_free);
     set_min(Crumb::MinLargestInternal, h.internal_largest);
     set_min(Crumb::MinFreePsram, h.psram_free);
     set_min(Crumb::MinLargestPsram, h.psram_largest);
+}
+
+/// The task watchdog only covers the main loop and display thread. The
+/// background worker can legitimately block for a while on network I/O, so
+/// instead check that it never sits in one mid-fetch stage for too long. If
+/// it does, panic to get a coredump of where it's stuck, then reboot.
+fn check_worker() {
+    let stage = get(Crumb::WorkerStage);
+    let idle =
+        stage == Stage::Boot as u32 || stage == Stage::WorkerSleep as u32;
+    let stuck_for = uptime_s().saturating_sub(get(Crumb::WorkerStageSinceS));
+    if !idle && stuck_for > WORKER_STUCK_S {
+        let name = STAGE_NAMES.get(stage as usize).copied().unwrap_or("?");
+        panic!("diag: background worker stuck in '{name}' for {stuck_for}s");
+    }
 }
 
 pub fn uptime_ms() -> u64 {
@@ -264,10 +299,25 @@ pub fn uptime_s() -> u32 {
 pub static TEST_HANG: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// Set via `POST /api/debug/test-hang-worker` to wedge the background
+/// worker mid-fetch, to verify the worker hang guard (~5 min).
+pub static TEST_HANG_WORKER: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Called from the main loop. Never returns if a test hang was requested.
 pub fn maybe_test_hang() {
-    if TEST_HANG.load(Ordering::Relaxed) {
-        warn!("diag: test hang requested, blocking main loop forever");
+    hang_if_requested(&TEST_HANG, "main loop");
+}
+
+/// Called from the background worker. Never returns if a test hang was
+/// requested.
+pub fn maybe_test_hang_worker() {
+    hang_if_requested(&TEST_HANG_WORKER, "background worker");
+}
+
+fn hang_if_requested(flag: &std::sync::atomic::AtomicBool, what: &str) {
+    if flag.load(Ordering::Relaxed) {
+        warn!("diag: test hang requested, blocking {what} forever");
         loop {
             std::thread::sleep(std::time::Duration::from_secs(1));
         }

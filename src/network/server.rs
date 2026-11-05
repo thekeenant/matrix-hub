@@ -188,6 +188,21 @@ pub fn start_server(
         Ok::<(), anyhow::Error>(())
     })?;
 
+    // Diagnostics: deliberately hang the background worker mid-fetch to
+    // test the worker hang guard. Expect a reboot ~5 minutes later.
+    server.fn_handler(
+        "/api/debug/test-hang-worker",
+        Method::Post,
+        |request| {
+            crate::diag::TEST_HANG_WORKER
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            request.into_ok_response()?.write_all(
+                b"Worker will hang on its next fetch; expect a reboot ~5 min later",
+            )?;
+            Ok::<(), anyhow::Error>(())
+        },
+    )?;
+
     server.fn_handler("/*", Method::Get, |request| {
         info!("Captive Portal wildcard hit: {}", request.uri());
         // Redirect all other GET requests (Captive Portal checks) to the root URL

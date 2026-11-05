@@ -82,7 +82,7 @@ const MAX_STALE_FETCHES: u32 = 3;
 // ============================================================================
 
 pub struct MtaApp {
-    fetch_task: Option<TimerTask<()>>,
+    fetch_task: Option<TimerTask>,
     shared_stations: Arc<Mutex<(bool, Vec<StationData>)>>,
     stations: Vec<StationData>,
     current_idx: usize,

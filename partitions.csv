@@ -1,7 +1,10 @@
-# ESP-IDF partition table. Fits 4MB+ flash (the MatrixPortal S3 has 8MB).
-# nvs/phy_init match the previous default layout so saved config survives reflashing.
+# ESP-IDF partition table for 8MB flash (Adafruit MatrixPortal S3).
+# Two app slots for over-the-air updates (see src/ota.rs), plus a coredump
+# partition. nvs keeps its original offset/size so saved settings survive.
 # Name,    Type, SubType,  Offset,   Size
 nvs,       data, nvs,      0x9000,   0x6000,
-phy_init,  data, phy,      0xf000,   0x1000,
-factory,   app,  factory,  0x10000,  0x3D0000,
-coredump,  data, coredump, 0x3E0000, 0x20000,
+otadata,   data, ota,      0xf000,   0x2000,
+phy_init,  data, phy,      0x11000,  0x1000,
+ota_0,     app,  ota_0,    0x20000,  0x300000,
+ota_1,     app,  ota_1,    0x320000, 0x300000,
+coredump,  data, coredump, 0x620000, 0x20000,

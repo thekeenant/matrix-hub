@@ -23,6 +23,7 @@ mod display;
 mod input;
 mod mta;
 mod network;
+mod ota;
 mod platform;
 mod storage;
 mod task;
@@ -110,6 +111,7 @@ fn main() -> Result<()> {
     // whose esp-idf-svc 0.52 driver arms a ~u64::MAX timeout whenever its
     // queue empties, which overflows once uptime passes 24h: the esp_timer
     // task then spins forever and starves this loop.)
+    let mut ota_health = ota::HealthCheck::new();
     let mut every_second = Interval::new(Duration::from_secs(1));
     let mut last_frame = Instant::now();
     loop {
@@ -128,6 +130,7 @@ fn main() -> Result<()> {
         if every_second.tick() {
             diag::tick_1s();
             wifi.check();
+            ota_health.tick(diag::uptime_s(), wifi.status().is_connected());
         }
 
         // Real elapsed time, capped so a long stall (e.g. a WiFi reconfigure)

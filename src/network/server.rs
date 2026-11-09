@@ -123,6 +123,41 @@ pub fn start_server(
         Ok(())
     })?;
 
+    // Over-the-air firmware update: the raw app image as the body, with
+    // `Authorization: Bearer <OTA_PASSWORD>` (see scripts/ota.sh)
+    server.fn_handler("/api/ota", Method::Post, |mut request| {
+        if !crate::ota::authorized(request.header("Authorization")) {
+            request
+                .into_status_response(401)?
+                .write_all(b"Unauthorized")?;
+            return Ok::<(), anyhow::Error>(());
+        }
+        let content_length = request
+            .header("Content-Length")
+            .and_then(|len| len.parse().ok());
+
+        let result = crate::ota::install(content_length, |buf| {
+            request
+                .read(buf)
+                .map_err(|e| anyhow::anyhow!("Read failed: {e:?}"))
+        });
+        match result {
+            Ok(bytes) => {
+                request.into_ok_response()?.write_all(
+                    format!("Installed {bytes} bytes; restarting").as_bytes(),
+                )?;
+                crate::ota::restart_soon();
+            }
+            Err(e) => {
+                log::warn!("ota: upload failed: {e:#}");
+                request
+                    .into_status_response(400)?
+                    .write_all(format!("Update failed: {e:#}").as_bytes())?;
+            }
+        }
+        Ok(())
+    })?;
+
     // Diagnostics: live health snapshot (JSON)
     server.fn_handler("/api/debug", Method::Get, |request| {
         let body = crate::diag::report_json();

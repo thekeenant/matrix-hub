@@ -333,6 +333,7 @@ struct CoredumpReport {
 
 #[derive(Serialize)]
 struct Report {
+    firmware: crate::ota::FirmwareInfo,
     uptime_ms: u64,
     reset_reason: Option<&'static str>,
     now: Value,
@@ -350,6 +351,7 @@ pub fn report_json() -> String {
     let dump = coredump::location();
 
     let report = Report {
+        firmware: crate::ota::firmware_info(),
         uptime_ms: uptime_ms(),
         reset_reason: prev.map(|p| p.reset_reason),
         now: crumbs_json(&snapshot_crumbs()),

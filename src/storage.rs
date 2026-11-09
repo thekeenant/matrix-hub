@@ -1,35 +1,44 @@
-use crate::proto::config::{DeviceConfig, WifiCredentials};
 use anyhow::{anyhow, Result};
 use buffa::Message;
 use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs};
 use log::error;
-use std::sync::{OnceLock, RwLock};
+use matrix_hub_core::device_config::merge_loaded;
+use matrix_hub_core::proto::config::{DeviceConfig, WifiCredentials};
+use std::sync::{OnceLock, PoisonError, RwLock};
 
-impl DeviceConfig {
-    pub fn default_config() -> Self {
-        Self {
-            wifi: buffa::MessageField::some(WifiCredentials {
-                ssid: dotenvy_macro::dotenv!("WIFI_SSID").to_string(),
-                pass: dotenvy_macro::dotenv!("WIFI_PASS").to_string(),
-                __buffa_unknown_fields: Default::default(),
-            }),
-            brightness: 50,
-            min_minutes: Some(1),
+/// Compiled-in defaults (WiFi from .env), used for anything not in flash.
+fn default_config() -> DeviceConfig {
+    DeviceConfig {
+        wifi: buffa::MessageField::some(WifiCredentials {
+            ssid: dotenvy_macro::dotenv!("WIFI_SSID").to_string(),
+            pass: dotenvy_macro::dotenv!("WIFI_PASS").to_string(),
             __buffa_unknown_fields: Default::default(),
-        }
+        }),
+        brightness: 50,
+        min_minutes: Some(1),
+        __buffa_unknown_fields: Default::default(),
     }
 }
 
 pub fn global_config() -> &'static RwLock<DeviceConfig> {
     static CONFIG: OnceLock<RwLock<DeviceConfig>> = OnceLock::new();
-    CONFIG.get_or_init(|| RwLock::new(DeviceConfig::default_config()))
+    CONFIG.get_or_init(|| RwLock::new(default_config()))
+}
+
+/// Run `f` with read access to the current config, without cloning it.
+pub fn with_config<R>(f: impl FnOnce(&DeviceConfig) -> R) -> R {
+    f(&global_config()
+        .read()
+        .unwrap_or_else(PoisonError::into_inner))
 }
 
 pub fn get_config() -> DeviceConfig {
-    match global_config().read() {
-        Ok(guard) => guard.clone(),
-        Err(poisoned) => poisoned.into_inner().clone(),
-    }
+    with_config(DeviceConfig::clone)
+}
+
+/// Display brightness (stored as u32, validated to 1-255).
+pub fn brightness() -> u8 {
+    with_config(|c| u8::try_from(c.brightness).unwrap_or(u8::MAX))
 }
 
 pub fn global_nvs() -> &'static OnceLock<EspDefaultNvsPartition> {
@@ -57,59 +66,14 @@ fn read_nvs_config(
     Ok(Some(decoded))
 }
 
-/// Merges fields loaded from NVS into a baseline configuration.
-///
-/// If you add a new field to `config.proto`, the compiler will force you
-/// to update the exhaustive destructuring pattern here. You must then add
-/// logic to handle merging the new field into the `base` config.
-fn validate_and_apply_loaded_config(
-    potentially_invalid_loaded_config: DeviceConfig,
-    mut config: DeviceConfig,
-) -> DeviceConfig {
-    let DeviceConfig {
-        wifi,
-        brightness,
-        min_minutes,
-        __buffa_unknown_fields: _,
-    } = potentially_invalid_loaded_config;
-
-    if !wifi.ssid.is_empty() {
-        config.wifi = buffa::MessageField::some(WifiCredentials {
-            ssid: wifi.ssid.clone(),
-            pass: wifi.pass.clone(),
-            __buffa_unknown_fields: Default::default(),
-        });
-    } else if !wifi.pass.is_empty() {
-        config.wifi = buffa::MessageField::some(WifiCredentials {
-            ssid: config.wifi.ssid.clone(),
-            pass: wifi.pass.clone(),
-            __buffa_unknown_fields: Default::default(),
-        });
-    }
-
-    if brightness != 0 {
-        // Enforce max brightness to fit in u8
-        config.brightness = brightness.clamp(1, 255);
-    }
-
-    if let Some(m) = min_minutes {
-        config.min_minutes = Some(m);
-    }
-
-    config
-}
-
 pub fn init_config(nvs_partition: EspDefaultNvsPartition) {
     let _ = global_nvs().set(nvs_partition.clone());
-    let mut config = DeviceConfig::default_config();
+    let mut config = default_config();
     let mut needs_save = true;
 
     match read_nvs_config(&nvs_partition) {
         Ok(Some(decoded)) => {
-            let merged = validate_and_apply_loaded_config(
-                decoded.clone(),
-                config.clone(),
-            );
+            let merged = merge_loaded(decoded.clone(), config.clone());
 
             if decoded == merged {
                 needs_save = false;

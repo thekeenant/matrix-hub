@@ -1,15 +1,14 @@
-# We don't need a massive 64KB stack for the main task, 32KB is plenty
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768
+# Task stacks live in scarce internal RAM (PSRAM can't be used for them), and
+# internal RAM was measured at ~1KB headroom. Sizes below are based on measured
+# peak usage from /api/debug (stack_free_min) with generous margin:
+#   main ~3.4KB used, IDLE ~0.7KB, sys_evt ~1.6KB.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
+CONFIG_FREERTOS_IDLE_TASK_STACKSIZE=2560
 
-# Increase a bit these stack sizes as they are also a bit too small by default
-CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=8192
-CONFIG_FREERTOS_IDLE_TASK_STACKSIZE=8192
-
-# You might have to increase this further if you spawn your own Rust threads 
-# that allocate large stack variables; or better yet - use 
-# `std::thread::Builder::new().stack_size(XXX)` for spawning.
-# Tokio's worker threads will use this default if not explicitly configured.
-CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=32768
+# Default for std::thread::spawn without an explicit size. Prefer
+# `std::thread::Builder::new().stack_size(XXX)` for every thread.
+CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=8192
 # Enable PSRAM
 # This adds the external RAM directly into Rust's standard allocator!
 # We let ESP-IDF auto-detect the PSRAM mode (Quad vs Octal) and speed to avoid hardware mismatch aborts.
@@ -21,3 +20,39 @@ CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 
 # Reserve 128KB of Internal SRAM strictly for DMA (prevents WiFi from stealing our Display buffer memory!)
 CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=131072
+
+# ---------------------------------------------------------------------------
+# Diagnostics (see src/diag.rs)
+# ---------------------------------------------------------------------------
+# Custom partition table with a coredump partition (partitions.csv in repo root)
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# A watchdog timeout now panics (dumping every task to flash) and reboots,
+# instead of printing a warning to a serial port nobody is reading.
+# The main loop and display thread subscribe themselves explicitly. Idle-task
+# checking is off so a long CPU burst in a low-priority task (e.g. parsing a
+# big feed) can't cause a false-positive reboot.
+CONFIG_ESP_TASK_WDT_PANIC=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=n
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=n
+
+# Save a coredump (all task stacks) to flash on panic; served at /api/coredump
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_SHA256=y
+# Dedicated stack for writing the coredump, so it doesn't depend on whichever
+# (possibly small) task stack was active when the panic hit
+CONFIG_ESP_COREDUMP_STACK_SIZE=3072
+
+# Task list + per-task CPU time for /api/debug
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID=y
+
+# Over-the-air updates: a new image boots "unverified" and is rolled back by
+# the bootloader if it reboots before marking itself valid (src/ota.rs).
+# Requires flashing the ESP-IDF-built bootloader (scripts/flash-usb.sh).
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

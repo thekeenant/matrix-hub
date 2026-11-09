@@ -1,0 +1,29 @@
+[package]
+name = "matrix-hub-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Hardware-independent logic of Matrix Hub, testable on the host"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+buffa = { version = "0.7", default-features = false }
+embedded-graphics = "0.8.1"
+log = "0.4"
+rand = { version = "0.8.5", features = ["small_rng"] }
+
+[dev-dependencies]
+googletest = "0.14"
+
+[build-dependencies]
+buffa-build = "0.7"
+protoc-prebuilt = "0.3"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+allow_attributes_without_reason = "warn"
+unwrap_used = "warn"
+expect_used = "warn"

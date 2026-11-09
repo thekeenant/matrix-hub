@@ -1,0 +1,4 @@
+# This crate is built for the host when testing (the firmware also builds it
+# for the ESP32-S3 as a path dependency, using the root config instead).
+[build]
+target = "x86_64-unknown-linux-gnu"

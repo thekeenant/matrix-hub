@@ -1,7 +1,12 @@
+//! Captive-portal DNS server (replies are built in `matrix_hub_core`).
+
 use anyhow::Result;
-use log::{error, info};
+use log::{debug, error, info};
 use std::net::UdpSocket;
 use std::thread;
+
+use matrix_hub_core::config::AP_IP;
+use matrix_hub_core::net::dns::build_response;
 
 pub fn start_dns_server() {
     thread::Builder::new()
@@ -29,55 +34,13 @@ fn run_dns_server() -> Result<()> {
             }
         };
 
-        info!("DNS query from {}, length: {}", src, amt);
-        if amt < 12 {
+        let Some(response) = build_response(&buf[..amt], AP_IP) else {
+            debug!("DNS: ignoring malformed/unsupported packet from {src}");
             continue;
-        }
-
-        // Simple DNS Hijacking:
-        // We only modify the flags, answer count, and append the answer.
-        let mut response = buf[..amt].to_vec();
-
-        // Flags: QR = 1, AA = 1, RD = 1, RA = 0, Z = 0, RCODE = 0
-        response[2] = 0x84; // Standard response
-        response[3] = 0x00; // No error
-
-        // Answer Count: 1
-        response[6] = 0;
-        response[7] = 1;
-
-        // Append Answer (Pointer to query name)
-        response.push(0xC0);
-        response.push(0x0C);
-
-        // Type A (1)
-        response.push(0x00);
-        response.push(0x01);
-
-        // Class IN (1)
-        response.push(0x00);
-        response.push(0x01);
-
-        // TTL (60s)
-        response.push(0x00);
-        response.push(0x00);
-        response.push(0x00);
-        response.push(0x3C);
-
-        // RDLENGTH (4 bytes for IP)
-        response.push(0x00);
-        response.push(0x04);
-
-        // IP Address: 192.168.71.1
-        response.push(192);
-        response.push(168);
-        response.push(71);
-        response.push(1);
+        };
 
         if let Err(e) = socket.send_to(&response, src) {
             error!("Failed to send DNS response: {:?}", e);
-        } else {
-            info!("DNS response sent to {}", src);
         }
     }
 }

@@ -1,8 +1,6 @@
-#![allow(dead_code, reason = "unused task utilities")]
-
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::Duration;
 
@@ -43,67 +41,46 @@ fn get_worker() -> Sender<Job> {
         .clone()
 }
 
-pub struct TimerTask<T> {
-    latest: Arc<Mutex<Option<T>>>,
+/// Runs a job immediately and then every `interval` on the shared
+/// background worker thread, until dropped.
+///
+/// All `TimerTask`s share one worker thread, so jobs run one at a time.
+/// Dropping a task stops it at its next check (within ~100ms while sleeping),
+/// but a job already in progress (e.g. an HTTP fetch) runs to completion
+/// first, delaying any task queued behind it.
+pub struct TimerTask {
     running: Arc<AtomicBool>,
 }
 
-impl<T> TimerTask<T> {
+impl TimerTask {
     pub fn spawn<F>(interval: Duration, mut f: F) -> Self
     where
-        F: FnMut() -> T + Send + 'static,
-        T: Send + 'static,
+        F: FnMut() + Send + 'static,
     {
-        let latest = Arc::new(Mutex::new(None));
         let running = Arc::new(AtomicBool::new(true));
-
-        let l2 = latest.clone();
         let r2 = running.clone();
 
         get_worker()
             .send(Box::new(move || {
-                // Immediately execute once before sleeping
-                if r2.load(Ordering::Relaxed) {
-                    let res = f();
-                    if let Ok(mut guard) = l2.lock() {
-                        *guard = Some(res);
-                    }
-                }
-
                 while r2.load(Ordering::Relaxed) {
-                    // Sleep cleanly in small increments to allow fast shutdown
+                    f();
+
+                    // Sleep in small increments to allow fast shutdown
                     for _ in 0..(interval.as_millis() / 100).max(1) {
                         if !r2.load(Ordering::Relaxed) {
                             break;
                         }
                         thread::sleep(Duration::from_millis(100));
                     }
-
-                    if r2.load(Ordering::Relaxed) {
-                        let res = f();
-                        if let Ok(mut guard) = l2.lock() {
-                            *guard = Some(res);
-                        }
-                    }
                 }
             }))
             .unwrap_or_else(|e| panic!("Failed to send task to worker: {e:?}"));
 
-        Self { latest, running }
-    }
-
-    pub fn get_latest(&self) -> Option<T>
-    where
-        T: Clone,
-    {
-        self.latest
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+        Self { running }
     }
 }
 
-impl<T> Drop for TimerTask<T> {
+impl Drop for TimerTask {
     fn drop(&mut self) {
         self.running.store(false, Ordering::Relaxed);
     }

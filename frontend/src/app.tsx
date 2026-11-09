@@ -1,152 +1,180 @@
-import { useState, useEffect } from 'preact/hooks';
-import { DeviceConfig, UpdateConfigRequest } from './generated/proto/config';
-import './app.css';
+import { useEffect, useState } from 'preact/hooks';
+import type { ComponentChildren } from 'preact';
+import { DeviceConfig } from './generated/proto/config';
+import { fetchConfig, saveConfig, type ConfigField } from './api';
 
-type ToastType = 'success' | 'error' | 'info' | null;
+type ToastType = 'success' | 'error' | 'info';
+type Toast = { message: string; type: ToastType } | null;
+type Notify = (message: string, type: ToastType) => void;
+
+const DEFAULT_CONFIG: DeviceConfig = {
+  wifi: { ssid: '', pass: '' },
+  brightness: 128,
+  minMinutes: 1,
+};
 
 export function App() {
-  const [config, setConfig] = useState<DeviceConfig>({
-    wifi: { ssid: '', pass: '' },
-    brightness: 128,
-  });
+  const [config, setConfig] = useState<DeviceConfig>(DEFAULT_CONFIG);
   const [loading, setLoading] = useState(true);
-  const [savingWifi, setSavingWifi] = useState(false);
-  const [savingBrightness, setSavingBrightness] = useState(false);
-  const [toast, setToast] = useState<{ message: string; type: ToastType }>({ message: '', type: null });
+  const [toast, setToast] = useState<Toast>(null);
+
+  const notify: Notify = (message, type) => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 5000);
+  };
 
   useEffect(() => {
-    fetchConfig();
+    fetchConfig()
+      .then(setConfig)
+      .catch((err) => {
+        console.error(err);
+        notify('Could not load config (are you running on the device?)', 'info');
+      })
+      .finally(() => setLoading(false));
   }, []);
 
-  const showToast = (message: string, type: ToastType) => {
-    setToast({ message, type });
-    setTimeout(() => setToast({ message: '', type: null }), 5000);
-  };
-
-  const fetchConfig = async () => {
-    try {
-      const response = await fetch('/api/config');
-      if (!response.ok) throw new Error('Failed to fetch config');
-      const buffer = await response.arrayBuffer();
-      const decoded = DeviceConfig.decode(new Uint8Array(buffer));
-      
-      if (!decoded.wifi) decoded.wifi = { ssid: '', pass: '' };
-      
-      setConfig(decoded);
-      setLoading(false);
-    } catch (err) {
-      console.error(err);
-      setLoading(false);
-      showToast('Could not load config (are you running on the ESP32?)', 'info');
-    }
-  };
-
-  const savePartialConfig = async (mask: string[], isWifi: boolean) => {
-    if (isWifi) setSavingWifi(true);
-    else setSavingBrightness(true);
-    setToast({ message: '', type: null });
-
-    try {
-      const req = UpdateConfigRequest.create({
-        config: config,
-        updateMask: mask,
-      });
-      const binaryData = UpdateConfigRequest.encode(req).finish();
-      const response = await fetch('/api/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/octet-stream' },
-        body: binaryData,
-      });
-
-      if (!response.ok) throw new Error('Failed to save config');
-      showToast(`${isWifi ? 'WiFi' : 'Brightness'} settings saved!`, 'success');
-    } catch (err) {
-      console.error(err);
-      showToast('Error saving settings. Please try again.', 'error');
-    } finally {
-      if (isWifi) setSavingWifi(false);
-      else setSavingBrightness(false);
-    }
-  };
-
   if (loading) {
-    return <div class="glass-panel"><p style={{textAlign: 'center'}}>Loading Matrix Hub...</p></div>;
+    return (
+      <div class="glass-panel">
+        <p class="loading">Loading Matrix Hub...</p>
+      </div>
+    );
   }
+
+  const update = (patch: Partial<DeviceConfig>) => setConfig({ ...config, ...patch });
 
   return (
     <div class="glass-panel">
       <h1>Matrix Hub</h1>
-      
-      {toast.type && (
-        <div class={`toast ${toast.type}`}>
-          {toast.message}
-        </div>
-      )}
 
-      <form onSubmit={(e) => { e.preventDefault(); savePartialConfig(['wifi'], true); }}>
-        <h2 style={{ fontSize: '1.2rem', marginTop: 0, marginBottom: '16px', color: '#38bdf8' }}>WiFi Network</h2>
-        <div class="form-group">
-          <label htmlFor="ssid">WiFi SSID</label>
+      {toast && <div class={`toast ${toast.type}`}>{toast.message}</div>}
+
+      <SettingsForm
+        title="WiFi Network"
+        submitLabel="Update WiFi"
+        config={config}
+        fields={['wifi']}
+        notify={notify}
+      >
+        <Field label="WiFi SSID" id="ssid">
           <input
             id="ssid"
             type="text"
-            value={config.wifi?.ssid || ''}
-            onInput={(e) => setConfig({ ...config, wifi: { ...config.wifi!, ssid: (e.target as HTMLInputElement).value } })}
+            value={config.wifi?.ssid ?? ''}
+            onInput={(e) => update({ wifi: { pass: '', ...config.wifi, ssid: e.currentTarget.value } })}
             placeholder="Network Name"
+            maxLength={32}
             required
           />
-        </div>
-
-        <div class="form-group">
-          <label htmlFor="pass">WiFi Password</label>
+        </Field>
+        <Field label="WiFi Password" id="pass">
           <input
             id="pass"
             type="password"
-            value={config.wifi?.pass || ''}
-            onInput={(e) => setConfig({ ...config, wifi: { ...config.wifi!, pass: (e.target as HTMLInputElement).value } })}
+            value={config.wifi?.pass ?? ''}
+            onInput={(e) => update({ wifi: { ssid: '', ...config.wifi, pass: e.currentTarget.value } })}
             placeholder="Password (leave blank if open)"
+            maxLength={64}
           />
-        </div>
+        </Field>
+      </SettingsForm>
 
-        <button type="submit" disabled={savingWifi}>
-          {savingWifi ? 'Saving...' : 'Update WiFi'}
-        </button>
-      </form>
+      <hr class="divider" />
 
-      <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '30px 0' }}></div>
-
-      <form onSubmit={(e) => { e.preventDefault(); savePartialConfig(['brightness', 'min_minutes'], false); }}>
-        <h2 style={{ fontSize: '1.2rem', marginTop: 0, marginBottom: '16px', color: '#38bdf8' }}>Display</h2>
-        <div class="form-group">
-          <label htmlFor="brightness">Global Brightness (0-255)</label>
-          <input
+      <SettingsForm
+        title="Display"
+        submitLabel="Update Display"
+        config={config}
+        fields={['brightness', 'min_minutes']}
+        notify={notify}
+      >
+        <Field label="Global Brightness (1-255)" id="brightness">
+          <NumberInput
             id="brightness"
-            type="number"
-            min="0"
-            max="255"
+            min={1}
+            max={255}
             value={config.brightness}
-            onInput={(e) => setConfig({ ...config, brightness: parseInt((e.target as HTMLInputElement).value) || 0 })}
-            required
+            onChange={(brightness) => update({ brightness })}
           />
-        </div>
-
-        <div class="form-group">
-          <label htmlFor="minMinutes">Minimum Minutes to Show (0+)</label>
-          <input
+        </Field>
+        <Field label="Minimum Minutes to Show (0-60)" id="minMinutes">
+          <NumberInput
             id="minMinutes"
-            type="number"
-            min="0"
-            max="60"
+            min={0}
+            max={60}
             value={config.minMinutes ?? 1}
-            onInput={(e) => setConfig({ ...config, minMinutes: parseInt((e.target as HTMLInputElement).value) || 0 })}
-            required
+            onChange={(minMinutes) => update({ minMinutes })}
           />
-        </div>
-
-        <button type="submit" disabled={savingBrightness}>
-          {savingBrightness ? 'Saving...' : 'Update Display'}
-        </button>
-      </form>
+        </Field>
+      </SettingsForm>
     </div>
+  );
+}
+
+/** A form section that saves only its own `fields` of the config. */
+function SettingsForm(props: {
+  title: string;
+  submitLabel: string;
+  config: DeviceConfig;
+  fields: ConfigField[];
+  notify: Notify;
+  children: ComponentChildren;
+}) {
+  const [saving, setSaving] = useState(false);
+
+  const onSubmit = async (e: Event) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await saveConfig(props.config, props.fields);
+      props.notify(`${props.title} settings saved!`, 'success');
+    } catch (err) {
+      console.error(err);
+      props.notify(`Error saving ${props.title} settings: ${(err as Error).message}`, 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form onSubmit={onSubmit}>
+      <h2 class="section-title">{props.title}</h2>
+      {props.children}
+      <button type="submit" disabled={saving}>
+        {saving ? 'Saving...' : props.submitLabel}
+      </button>
+    </form>
+  );
+}
+
+function Field(props: { label: string; id: string; children: ComponentChildren }) {
+  return (
+    <div class="form-group">
+      <label htmlFor={props.id}>{props.label}</label>
+      {props.children}
+    </div>
+  );
+}
+
+function NumberInput(props: {
+  id: string;
+  min: number;
+  max: number;
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <input
+      id={props.id}
+      type="number"
+      min={props.min}
+      max={props.max}
+      value={props.value}
+      onInput={(e) => {
+        const n = parseInt(e.currentTarget.value, 10);
+        props.onChange(Number.isNaN(n) ? props.min : Math.min(props.max, Math.max(props.min, n)));
+      }}
+      required
+    />
   );
 }

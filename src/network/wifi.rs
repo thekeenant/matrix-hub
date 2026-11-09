@@ -1,109 +1,203 @@
-use anyhow::{anyhow, Result};
+//! WiFi bring-up and supervision.
+//!
+//! The device starts in mixed mode: a client connection to the configured
+//! network plus a setup access point (with a captive portal) for changing the
+//! credentials. Once the client connection is up, the access point is dropped.
 
+use anyhow::{anyhow, Context, Result};
+use esp_idf_svc::eventloop::EspSystemEventLoop;
+use esp_idf_svc::hal::modem::Modem;
+use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::wifi::{
     AccessPointConfiguration, AuthMethod, ClientConfiguration, Configuration,
     EspWifi,
 };
-use log::info;
+use log::{info, warn};
+use std::net::Ipv4Addr;
+use std::time::{Duration, Instant};
 
-pub fn connect_wifi(wifi: &mut EspWifi<'static>) -> Result<()> {
-    let (ssid, pass) = {
-        let guard = crate::storage::global_config()
-            .read()
-            .unwrap_or_else(|e| e.into_inner());
-        (guard.wifi.ssid.clone(), guard.wifi.pass.clone())
-    };
+use super::NetworkStatus;
+use crate::config::{AP_PASS, AP_SSID};
+use crate::diag::{self, Crumb};
 
-    let client_config = ClientConfiguration {
-        ssid: ssid
-            .as_str()
-            .try_into()
-            .map_err(|_| anyhow!("Invalid SSID length"))?,
-        password: pass
-            .as_str()
-            .try_into()
-            .map_err(|_| anyhow!("Invalid Password length"))?,
-        auth_method: if pass.is_empty() {
-            AuthMethod::None
-        } else {
-            AuthMethod::WPA2Personal
-        },
-        ..Default::default()
-    };
+/// After new credentials are saved, wait this long before reconnecting so the
+/// HTTP response confirming the save can reach the browser first.
+const CREDENTIALS_RECONNECT_DELAY: Duration = Duration::from_secs(1);
 
-    let ap_config = AccessPointConfiguration {
-        ssid: crate::config::AP_SSID
-            .try_into()
-            .map_err(|_| anyhow!("Invalid Matrix-Hub AP SSID length"))?,
-        password: crate::config::AP_PASS
-            .try_into()
-            .map_err(|_| anyhow!("Invalid Matrix-Hub AP Pass length"))?,
-        auth_method: {
-            #[allow(
-                clippy::const_is_empty,
-                reason = "AP_PASS is a compile-time constant"
-            )]
-            if crate::config::AP_PASS.is_empty() {
-                AuthMethod::None
-            } else {
-                AuthMethod::WPA2Personal
-            }
-        },
-        ..Default::default()
-    };
+/// While disconnected in client-only mode, retry this often (in `check` calls,
+/// i.e. seconds).
+const RECONNECT_EVERY_CHECKS: u32 = 15;
 
-    let _ = wifi.disconnect();
+pub struct WifiManager {
+    wifi: EspWifi<'static>,
+    status: NetworkStatus,
+    /// The setup AP has been dropped and we run as a plain client
+    client_only: bool,
+    checks_disconnected: u32,
+    reconnect_at: Option<Instant>,
+}
 
-    wifi.set_configuration(&Configuration::Mixed(client_config, ap_config))
-        .map_err(|e| anyhow!("Could not set wifi config: {:?}", e))?;
-
-    // Configure the AP's DHCP server to provide the ESP32 as the DNS server
-    use esp_idf_svc::handle::RawHandle;
-    use esp_idf_svc::sys::{
-        esp_netif_dhcp_option_id_t_ESP_NETIF_DOMAIN_NAME_SERVER,
-        esp_netif_dhcp_option_mode_t_ESP_NETIF_OP_SET, esp_netif_dhcps_option,
-        esp_netif_dns_info_t, esp_netif_dns_type_t_ESP_NETIF_DNS_MAIN,
-        esp_netif_get_ip_info, esp_netif_ip_info_t, esp_netif_set_dns_info,
-    };
-
-    #[allow(unsafe_code, reason = "Calling C FFI for DHCP options")]
-    unsafe {
-        let netif_handle = wifi.ap_netif().handle() as *mut _;
-
-        // Get the AP's IP
-        let mut ip_info: esp_netif_ip_info_t = std::mem::zeroed();
-        esp_netif_get_ip_info(netif_handle, &mut ip_info);
-
-        // Set the Main DNS server to be the AP's IP
-        let mut dns_info: esp_netif_dns_info_t = std::mem::zeroed();
-        dns_info.ip.type_ = 0; // ESP_IPADDR_TYPE_V4
-        dns_info.ip.u_addr.ip4 = ip_info.ip;
-
-        esp_netif_set_dns_info(
-            netif_handle,
-            esp_netif_dns_type_t_ESP_NETIF_DNS_MAIN,
-            &mut dns_info,
-        );
-
-        // Tell the DHCP server to advertise the Main DNS server
-        let mut dhcps_dns_value: u8 = 1; // 1 = OFFER_DNS_MAIN
-        let _ = esp_netif_dhcps_option(
-            netif_handle,
-            esp_netif_dhcp_option_mode_t_ESP_NETIF_OP_SET,
-            esp_netif_dhcp_option_id_t_ESP_NETIF_DOMAIN_NAME_SERVER,
-            &mut dhcps_dns_value as *mut _ as *mut _,
-            1,
-        );
+impl WifiManager {
+    /// Create the WiFi driver and start connecting with the stored
+    /// credentials (non-blocking).
+    pub fn start(
+        modem: Modem<'static>,
+        sysloop: EspSystemEventLoop,
+        nvs: EspDefaultNvsPartition,
+    ) -> Result<Self> {
+        let wifi = EspWifi::new(modem, sysloop, Some(nvs))
+            .context("Failed to create WiFi driver")?;
+        let mut manager = Self {
+            wifi,
+            status: NetworkStatus::Connecting,
+            client_only: false,
+            checks_disconnected: 0,
+            reconnect_at: None,
+        };
+        manager.connect().context("Failed to start WiFi")?;
+        Ok(manager)
     }
 
-    info!("Starting wifi...");
-    wifi.start()
-        .map_err(|e| anyhow!("Could not start wifi: {:?}", e))?;
+    pub const fn status(&self) -> NetworkStatus {
+        self.status
+    }
 
-    info!("Connecting to WiFi SSID: {}", ssid);
-    wifi.connect()
-        .map_err(|e| anyhow!("Could not connect wifi: {:?}", e))?;
+    /// New credentials were saved: reconnect with them shortly.
+    pub fn credentials_changed(&mut self) {
+        info!("WiFi credentials changed, reconnecting shortly");
+        self.reconnect_at = Some(Instant::now() + CREDENTIALS_RECONNECT_DELAY);
+    }
 
-    info!("WiFi connection initiated asynchronously!");
-    Ok(())
+    /// Cheap; call every frame. Performs a scheduled reconnect when due.
+    pub fn poll(&mut self) {
+        if self.reconnect_at.is_some_and(|at| Instant::now() >= at) {
+            self.reconnect_at = None;
+            info!("Reconnecting WiFi with new credentials");
+            if let Err(e) = self.connect() {
+                warn!("WiFi reconnect failed: {e:#}");
+            }
+        }
+    }
+
+    /// Call about once per second: refreshes the status, drops the setup AP
+    /// once connected, and retries if the connection was lost.
+    pub fn check(&mut self) {
+        // The netif keeps its old IP for a while after the link drops, so also
+        // ask the driver whether we're actually associated.
+        let associated = self.wifi.is_connected().unwrap_or(false);
+        let sta_ip = self
+            .wifi
+            .sta_netif()
+            .get_ip_info()
+            .ok()
+            .map(|info| info.ip)
+            .filter(|ip| !ip.is_unspecified());
+
+        self.status = match sta_ip.filter(|_| associated) {
+            Some(ip) => {
+                if !self.client_only {
+                    self.drop_access_point();
+                }
+                self.checks_disconnected = 0;
+                NetworkStatus::Connected(ip)
+            }
+            None if self.client_only => {
+                self.retry_periodically();
+                NetworkStatus::Connecting
+            }
+            None => self.access_point_ip().map_or(
+                NetworkStatus::Connecting,
+                NetworkStatus::SetupAccessPoint,
+            ),
+        };
+
+        diag::set(Crumb::WifiConnected, u32::from(self.status.is_connected()));
+    }
+
+    /// (Re)configure mixed client + setup-AP mode and start connecting.
+    fn connect(&mut self) -> Result<()> {
+        let (ssid, pass) = crate::storage::with_config(|c| {
+            (c.wifi.ssid.clone(), c.wifi.pass.clone())
+        });
+
+        let client = ClientConfiguration {
+            ssid: ssid
+                .as_str()
+                .try_into()
+                .map_err(|_| anyhow!("SSID too long"))?,
+            password: pass
+                .as_str()
+                .try_into()
+                .map_err(|_| anyhow!("Password too long"))?,
+            auth_method: auth_method_for(&pass),
+            ..Default::default()
+        };
+        let access_point = AccessPointConfiguration {
+            ssid: AP_SSID
+                .try_into()
+                .map_err(|_| anyhow!("Setup AP SSID too long"))?,
+            password: AP_PASS
+                .try_into()
+                .map_err(|_| anyhow!("Setup AP password too long"))?,
+            auth_method: auth_method_for(AP_PASS),
+            ..Default::default()
+        };
+
+        let _ = self.wifi.disconnect();
+        self.wifi
+            .set_configuration(&Configuration::Mixed(client, access_point))
+            .context("Could not set WiFi configuration")?;
+        crate::platform::advertise_self_as_dns(self.wifi.ap_netif());
+
+        self.wifi.start().context("Could not start WiFi")?;
+        info!("Connecting to WiFi SSID: {ssid}");
+        self.wifi.connect().context("Could not connect WiFi")?;
+
+        self.client_only = false;
+        self.checks_disconnected = 0;
+        self.status = NetworkStatus::Connecting;
+        Ok(())
+    }
+
+    fn drop_access_point(&mut self) {
+        if let Ok(Configuration::Mixed(client, _)) =
+            self.wifi.get_configuration()
+        {
+            match self.wifi.set_configuration(&Configuration::Client(client)) {
+                Ok(()) => info!(
+                    "Connected; switched to client-only mode, setup AP dropped"
+                ),
+                Err(e) => warn!("Failed to drop setup AP: {e}"),
+            }
+        }
+        self.client_only = true;
+    }
+
+    /// Neither ESP-IDF nor EspWifi reconnects by itself after the link drops
+    /// (router reboot, DHCP failure, interference...). In client-only mode,
+    /// retry periodically. (With the AP up we don't, as scans disrupt it.)
+    fn retry_periodically(&mut self) {
+        self.checks_disconnected += 1;
+        if self.checks_disconnected % RECONNECT_EVERY_CHECKS == 0 {
+            diag::MAIN.enter(diag::Stage::WifiReconnect);
+            warn!(
+                "WiFi down for ~{}s, retrying connect",
+                self.checks_disconnected
+            );
+            let _ = self.wifi.connect();
+            diag::inc(Crumb::WifiReconnects);
+        }
+    }
+
+    fn access_point_ip(&self) -> Option<Ipv4Addr> {
+        self.wifi.ap_netif().get_ip_info().ok().map(|info| info.ip)
+    }
+}
+
+fn auth_method_for(password: &str) -> AuthMethod {
+    if password.is_empty() {
+        AuthMethod::None
+    } else {
+        AuthMethod::WPA2Personal
+    }
 }

@@ -3,7 +3,7 @@ target = "xtensa-esp32s3-espidf"
 
 [target.'cfg(target_os = "espidf")']
 linker = "ldproxy"
-runner = "espflash flash --monitor"
+runner = "scripts/flash-usb.sh"
 rustflags = [ "--cfg",  "espidf_time64"]
 
 [unstable]
@@ -13,6 +13,10 @@ build-std = ["std", "panic_abort"]
 MCU = "esp32s3"
 ESP_IDF_VERSION = "v5.5.3"
 ESP_IDF_TOOLS_INSTALL_DIR = "workspace"
+# Copy partitions.csv into the generated ESP-IDF CMake project, where
+# CONFIG_PARTITION_TABLE_CUSTOM_FILENAME is resolved
+ESP_IDF_GLOB_PARTITIONS_BASE = { value = ".", relative = true }
+ESP_IDF_GLOB_PARTITIONS_1 = "partitions.csv"
 
 # Uncomment this if you have moved the target dir by setting CARGO_TARGET_DIR or similar.
 # Required for now due to embuild limitations.

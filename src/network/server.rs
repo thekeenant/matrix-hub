@@ -4,12 +4,17 @@ use esp_idf_svc::http::Method;
 use esp_idf_svc::io::Write;
 
 use log::info;
+use matrix_hub_core::device_config::{ConfigUpdate, MAX_UPDATE_BYTES};
+use matrix_hub_core::net::body::BodyCollector;
 
 pub fn start_server(
-    credentials_tx: std::sync::mpsc::Sender<(String, String)>,
+    credentials_tx: std::sync::mpsc::Sender<()>,
 ) -> Result<EspHttpServer<'static>> {
     let config = Configuration {
         uri_match_wildcard: true,
+        // Handlers build the /api/debug report and stream OTA images; the
+        // 6KB default overflowed (corrupting memory, crashing lwIP later)
+        stack_size: 12 * 1024,
         ..Default::default()
     };
     let mut server = EspHttpServer::new(&config)
@@ -71,73 +76,182 @@ pub fn start_server(
     })?;
 
     server.fn_handler("/api/config", Method::Post, move |mut request| {
-        use buffa::Message;
-        let mut buf = vec![0; 1024];
-        let bytes_read = request.read(&mut buf).unwrap_or(0);
-        let mut slice = &buf[..bytes_read];
-
-        let Ok(update_req) =
-            crate::proto::config::UpdateConfigRequest::decode(&mut slice)
-        else {
-            request
-                .into_status_response(400)?
-                .write_all(b"Bad Request")?;
-            return Ok::<(), anyhow::Error>(());
-        };
-
-        let Some(new_config) = update_req.config.into_option() else {
-            request.into_ok_response()?.write_all(b"OK")?;
-            return Ok::<(), anyhow::Error>(());
-        };
-
-        let update_wifi = update_req.update_mask.contains(&"wifi".to_string());
-        let update_brightness =
-            update_req.update_mask.contains(&"brightness".to_string());
-        let update_min_minutes =
-            update_req.update_mask.contains(&"min_minutes".to_string());
-
-        if let Err(e) = crate::storage::update_config(|config| {
-            if update_wifi || update_req.update_mask.is_empty() {
-                config.wifi = new_config.wifi.clone();
+        // Read the whole body: a single read() can return only part of it
+        let mut body = BodyCollector::new(None, MAX_UPDATE_BYTES)?;
+        let mut buf = [0u8; 256];
+        loop {
+            let n = request.read(&mut buf)?;
+            if n == 0 {
+                break;
             }
-            if update_brightness || update_req.update_mask.is_empty() {
-                config.brightness = new_config.brightness;
+            if body.push(&buf[..n]).is_err() {
+                request
+                    .into_status_response(413)?
+                    .write_all(b"Request too large")?;
+                return Ok::<(), anyhow::Error>(());
             }
-            if update_min_minutes || update_req.update_mask.is_empty() {
-                config.min_minutes = new_config.min_minutes;
-            }
-        }) {
-            request
-                .into_status_response(500)?
-                .write_all(format!("Failed to save: {:?}", e).as_bytes())?;
-            return Ok::<(), anyhow::Error>(());
         }
 
-        // If WiFi was updated, tell the background task to attempt reconnection
-        if update_wifi || update_req.update_mask.is_empty() {
-            info!("WiFi credentials updated. Sending update event...");
-            let _ = credentials_tx.send((
-                new_config.wifi.ssid.clone(),
-                new_config.wifi.pass.clone(),
-            ));
+        let update = match ConfigUpdate::parse(&body.finish()?) {
+            Ok(Some(update)) => update,
+            Ok(None) => {
+                request.into_ok_response()?.write_all(b"OK")?;
+                return Ok(());
+            }
+            Err(e) => {
+                request
+                    .into_status_response(400)?
+                    .write_all(e.to_string().as_bytes())?;
+                return Ok(());
+            }
+        };
+
+        if let Err(e) =
+            crate::storage::update_config(|config| update.apply(config))
+        {
+            request
+                .into_status_response(500)?
+                .write_all(format!("Failed to save: {e:?}").as_bytes())?;
+            return Ok(());
+        }
+
+        if update.changes_wifi() {
+            info!(
+                "WiFi credentials updated; asking the main loop to reconnect"
+            );
+            let _ = credentials_tx.send(());
         }
 
         request.into_ok_response()?.write_all(b"OK")?;
+        Ok(())
+    })?;
+
+    // Over-the-air firmware update: the raw app image as the body, with
+    // `Authorization: Bearer <OTA_PASSWORD>` (see scripts/ota.sh)
+    server.fn_handler("/api/ota", Method::Post, |mut request| {
+        if !crate::ota::authorized(request.header("Authorization")) {
+            request
+                .into_status_response(401)?
+                .write_all(b"Unauthorized")?;
+            return Ok::<(), anyhow::Error>(());
+        }
+        let content_length = request
+            .header("Content-Length")
+            .and_then(|len| len.parse().ok());
+
+        let result = crate::ota::install(content_length, |buf| {
+            request
+                .read(buf)
+                .map_err(|e| anyhow::anyhow!("Read failed: {e:?}"))
+        });
+        match result {
+            Ok(bytes) => {
+                request.into_ok_response()?.write_all(
+                    format!("Installed {bytes} bytes; restarting").as_bytes(),
+                )?;
+                crate::ota::restart_soon();
+            }
+            Err(e) => {
+                log::warn!("ota: upload failed: {e:#}");
+                request
+                    .into_status_response(400)?
+                    .write_all(format!("Update failed: {e:#}").as_bytes())?;
+            }
+        }
+        Ok(())
+    })?;
+
+    // Diagnostics: live health snapshot (JSON)
+    server.fn_handler("/api/debug", Method::Get, |request| {
+        let body = crate::diag::report_json();
+        let mut response = request.into_response(
+            200,
+            None,
+            &[
+                ("Content-Type", "application/json"),
+                ("Cache-Control", "no-store"),
+            ],
+        )?;
+        response.write_all(body.as_bytes())?;
         Ok::<(), anyhow::Error>(())
     })?;
+
+    // Diagnostics: raw coredump image from flash (decode with
+    // scripts/decode-coredump.sh). 404 if there is none.
+    server.fn_handler("/api/coredump", Method::Get, |request| {
+        let Some((addr, size)) = crate::platform::coredump::location() else {
+            request
+                .into_status_response(404)?
+                .write_all(b"No coredump")?;
+            return Ok::<(), anyhow::Error>(());
+        };
+
+        let len = size.to_string();
+        let mut response = request.into_response(
+            200,
+            None,
+            &[
+                ("Content-Type", "application/octet-stream"),
+                ("Content-Length", &len),
+            ],
+        )?;
+        let mut buf = vec![0u8; 1024];
+        let mut offset = 0;
+        while offset < size {
+            let n = buf.len().min(size - offset);
+            crate::platform::coredump::read(addr + offset, &mut buf[..n])?;
+            response.write_all(&buf[..n])?;
+            offset += n;
+        }
+        Ok::<(), anyhow::Error>(())
+    })?;
+
+    server.fn_handler("/api/coredump", Method::Delete, |request| {
+        crate::platform::coredump::erase()?;
+        request.into_ok_response()?.write_all(b"Erased")?;
+        Ok::<(), anyhow::Error>(())
+    })?;
+
+    // Diagnostics: deliberately hang the main loop to test the watchdog,
+    // coredump, and reboot path. Expect a reboot ~10s later.
+    server.fn_handler("/api/debug/test-hang", Method::Post, |request| {
+        crate::diag::TEST_HANG
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        request
+            .into_ok_response()?
+            .write_all(b"Main loop will hang; expect a watchdog reboot")?;
+        Ok::<(), anyhow::Error>(())
+    })?;
+
+    // Diagnostics: deliberately hang the background worker mid-fetch to
+    // test the worker hang guard. Expect a reboot ~5 minutes later.
+    server.fn_handler(
+        "/api/debug/test-hang-worker",
+        Method::Post,
+        |request| {
+            crate::diag::TEST_HANG_WORKER
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            request.into_ok_response()?.write_all(
+                b"Worker will hang on its next fetch; expect a reboot ~5 min later",
+            )?;
+            Ok::<(), anyhow::Error>(())
+        },
+    )?;
 
     server.fn_handler("/*", Method::Get, |request| {
         info!("Captive Portal wildcard hit: {}", request.uri());
         // Redirect all other GET requests (Captive Portal checks) to the root URL
+        let [a, b, c, d] = crate::config::AP_IP;
+        let location = format!("http://{a}.{b}.{c}.{d}/");
         let mut response = request.into_response(
             302,
             Some("Found"),
-            &[("Location", "http://192.168.71.1/")],
+            &[("Location", &location)],
         )?;
         response.write_all(b"Redirecting...")?;
         Ok::<(), anyhow::Error>(())
     })?;
 
-    info!("HTTP server listening on 192.168.71.1:80");
+    info!("HTTP server listening on port 80");
     Ok(server)
 }

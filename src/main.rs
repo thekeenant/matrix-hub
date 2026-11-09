@@ -11,12 +11,11 @@ use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::hal::gpio::{PinDriver, Pull};
 use esp_idf_svc::hal::i2c::{I2cConfig, I2cDriver};
 use esp_idf_svc::hal::peripherals::Peripherals;
-use esp_idf_svc::hal::task::block_on;
 use esp_idf_svc::hal::units::FromValueType;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use log::info;
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 mod config;
 mod diag;
@@ -39,8 +38,11 @@ use network::wifi::WifiManager;
 
 /// Framebuffers circulating between the main loop and the display
 const FRAMEBUFFER_POOL: usize = 3;
-/// Target frame period (~60 fps)
-const FRAME_MS: u64 = 16;
+/// Target frame period. Sleeps round up to the 10ms FreeRTOS tick, so the
+/// loop runs at ~50 fps; apps use the measured frame time.
+const FRAME_PERIOD: Duration = Duration::from_millis(16);
+/// Longest frame time passed to apps
+const MAX_FRAME_DT: Duration = Duration::from_millis(100);
 /// Priority of the main task: above network tasks (5), below WiFi (23)
 const MAIN_TASK_PRIORITY: u32 = 15;
 
@@ -98,45 +100,54 @@ fn main() -> Result<()> {
         || Box::new(apps::settings::SettingsApp::new(config::AP_SSID)),
     ]);
 
-    block_on(async {
-        info!("Main loop started on {:?}", esp_idf_svc::hal::cpu::core());
+    info!("Main loop started on {:?}", esp_idf_svc::hal::cpu::core());
 
-        // If this loop ever stops iterating for CONFIG_ESP_TASK_WDT_TIMEOUT_S,
-        // the watchdog panics, saves a coredump, and reboots.
-        diag::watch_current_thread();
+    // If this loop ever stops iterating for CONFIG_ESP_TASK_WDT_TIMEOUT_S,
+    // the watchdog panics, saves a coredump, and reboots.
+    diag::watch_current_thread();
 
-        let mut every_second = Interval::new(Duration::from_secs(1));
-        loop {
-            diag::feed_watchdog();
-            diag::inc(Crumb::MainFrames);
-            diag::maybe_test_hang();
+    // A plain sleep paces frames. (This used to await an embassy-time timer,
+    // whose esp-idf-svc 0.52 driver arms a ~u64::MAX timeout whenever its
+    // queue empties, which overflows once uptime passes 24h: the esp_timer
+    // task then spins forever and starves this loop.)
+    let mut every_second = Interval::new(Duration::from_secs(1));
+    let mut last_frame = Instant::now();
+    loop {
+        diag::feed_watchdog();
+        diag::inc(Crumb::MainFrames);
+        diag::maybe_test_hang();
 
-            diag::MAIN.enter(Stage::Input);
-            input.poll(|event| apps.handle(event));
+        diag::MAIN.enter(Stage::Input);
+        input.poll(|event| apps.handle(event));
 
-            diag::MAIN.enter(Stage::WifiCheck);
-            if credentials_rx.try_recv().is_ok() {
-                wifi.credentials_changed();
-            }
-            wifi.poll();
-            if every_second.tick() {
-                diag::tick_1s();
-                wifi.check();
-            }
-
-            diag::MAIN.enter(Stage::Update);
-            apps.update(&Frame {
-                dt_ms: FRAME_MS as f32,
-                network: wifi.status(),
-                accel: input.accel(),
-            });
-
-            render(&apps, &frames);
-
-            diag::MAIN.enter(Stage::Sleep);
-            embassy_time::Timer::after_millis(FRAME_MS).await;
+        diag::MAIN.enter(Stage::WifiCheck);
+        if credentials_rx.try_recv().is_ok() {
+            wifi.credentials_changed();
         }
-    })
+        wifi.poll();
+        if every_second.tick() {
+            diag::tick_1s();
+            wifi.check();
+        }
+
+        // Real elapsed time, capped so a long stall (e.g. a WiFi reconfigure)
+        // doesn't make animations jump
+        let now = Instant::now();
+        let dt = now.duration_since(last_frame).min(MAX_FRAME_DT);
+        last_frame = now;
+
+        diag::MAIN.enter(Stage::Update);
+        apps.update(&Frame {
+            dt_ms: dt.as_secs_f32() * 1000.0,
+            network: wifi.status(),
+            accel: input.accel(),
+        });
+
+        render(&apps, &frames);
+
+        diag::MAIN.enter(Stage::Sleep);
+        std::thread::sleep(FRAME_PERIOD.saturating_sub(now.elapsed()));
+    }
 }
 
 /// Draw the current frame into a free buffer and hand it to the display.

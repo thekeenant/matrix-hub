@@ -38,7 +38,7 @@ for _ in $(seq 1 60); do
         python3 -c '
 import json, sys
 fw = json.loads(sys.argv[1])["firmware"]
-print(f"Running {fw[\"git\"]} from {fw[\"running_slot\"]} ({fw[\"state\"]})")
+print("Running", fw["git"], "from", fw["running_slot"], "(" + fw["state"] + ")")
 sys.exit(0 if fw["git"] == sys.argv[2] else 1)' "$INFO" "$VERSION" && {
             echo "Done. It confirms itself after 60s healthy; otherwise it rolls back."
             exit 0

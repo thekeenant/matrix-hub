@@ -12,6 +12,9 @@ pub fn start_server(
 ) -> Result<EspHttpServer<'static>> {
     let config = Configuration {
         uri_match_wildcard: true,
+        // Handlers build the /api/debug report and stream OTA images; the
+        // 6KB default overflowed (corrupting memory, crashing lwIP later)
+        stack_size: 12 * 1024,
         ..Default::default()
     };
     let mut server = EspHttpServer::new(&config)

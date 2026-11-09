@@ -171,6 +171,40 @@ pub fn tasks() -> (Vec<TaskInfo>, u64) {
 // Coredump partition
 // ============================================================================
 
+/// Label and OTA state ("valid", "unverified", ...) of the running app slot.
+/// Cheap: unlike `EspOta::get_running_slot`, it doesn't read the app header.
+pub fn running_slot() -> (String, &'static str) {
+    // SAFETY: the running partition is a static record in the partition
+    // table; its label is a NUL-terminated array.
+    unsafe {
+        let partition = sys::esp_ota_get_running_partition();
+        if partition.is_null() {
+            return ("?".into(), "?");
+        }
+        let label = CStr::from_ptr((*partition).label.as_ptr())
+            .to_string_lossy()
+            .into_owned();
+        let mut state = 0;
+        let state = if sys::esp_ota_get_state_partition(partition, &mut state)
+            != sys::ESP_OK
+        {
+            "none" // e.g. flashed over USB without OTA data
+        } else {
+            match state {
+                sys::esp_ota_img_states_t_ESP_OTA_IMG_NEW => "new",
+                sys::esp_ota_img_states_t_ESP_OTA_IMG_PENDING_VERIFY => {
+                    "unverified"
+                }
+                sys::esp_ota_img_states_t_ESP_OTA_IMG_VALID => "valid",
+                sys::esp_ota_img_states_t_ESP_OTA_IMG_INVALID => "invalid",
+                sys::esp_ota_img_states_t_ESP_OTA_IMG_ABORTED => "aborted",
+                _ => "undefined",
+            }
+        };
+        (label, state)
+    }
+}
+
 pub mod coredump {
     use super::*;
 

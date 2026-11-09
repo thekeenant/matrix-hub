@@ -35,23 +35,11 @@ pub struct FirmwareInfo {
 }
 
 pub fn firmware_info() -> FirmwareInfo {
-    let slot = EspOta::new().and_then(|ota| ota.get_running_slot());
+    let (running_slot, state) = crate::platform::running_slot();
     FirmwareInfo {
         git: env!("MATRIX_HUB_GIT"),
-        running_slot: slot
-            .as_ref()
-            .map_or_else(|e| format!("? ({e})"), |s| s.label.to_string()),
-        state: slot.map_or("?", |s| state_name(s.state)),
-    }
-}
-
-const fn state_name(state: SlotState) -> &'static str {
-    match state {
-        SlotState::Factory => "factory",
-        SlotState::Valid => "valid",
-        SlotState::Invalid => "invalid",
-        SlotState::Unverified => "unverified",
-        SlotState::Unknown => "unknown",
+        running_slot,
+        state,
     }
 }
 

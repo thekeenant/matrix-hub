@@ -17,7 +17,7 @@ cp "$ELF" "$ROOT/logs/firmware-$(git -C "$ROOT" describe --always --dirty).elf"
 ${DRY_RUN:+echo} espflash flash \
     --bootloader "$BOOTLOADER" \
     --partition-table "$ROOT/partitions.csv" \
-    --erase-data-parts otadata \
+    --erase-parts otadata \
     --target-app-partition ota_0 \
     --flash-size 8mb \
     --non-interactive \
